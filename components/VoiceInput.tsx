@@ -8,11 +8,33 @@ interface VoiceInputProps {
   disabled: boolean;
 }
 
-// Extend window for browser speech recognition
+// Minimal type shim for the Web Speech API (not in all TS lib targets)
+interface ISpeechRecognitionEvent extends Event {
+  resultIndex: number;
+  results: SpeechRecognitionResultList;
+}
+
+interface ISpeechRecognition extends EventTarget {
+  lang: string;
+  interimResults: boolean;
+  continuous: boolean;
+  maxAlternatives: number;
+  start(): void;
+  stop(): void;
+  onstart: ((this: ISpeechRecognition, ev: Event) => void) | null;
+  onresult: ((this: ISpeechRecognition, ev: ISpeechRecognitionEvent) => void) | null;
+  onerror: ((this: ISpeechRecognition, ev: Event) => void) | null;
+  onend: ((this: ISpeechRecognition, ev: Event) => void) | null;
+}
+
+interface ISpeechRecognitionConstructor {
+  new (): ISpeechRecognition;
+}
+
 declare global {
   interface Window {
-    SpeechRecognition: typeof SpeechRecognition;
-    webkitSpeechRecognition: typeof SpeechRecognition;
+    SpeechRecognition: ISpeechRecognitionConstructor;
+    webkitSpeechRecognition: ISpeechRecognitionConstructor;
   }
 }
 
@@ -24,7 +46,7 @@ export default function VoiceInput({
   const [isListening, setIsListening] = useState(false);
   const [isSupported, setIsSupported] = useState(true);
   const [interimText, setInterimText] = useState("");
-  const recognitionRef = useRef<SpeechRecognition | null>(null);
+  const recognitionRef = useRef<ISpeechRecognition | null>(null);
 
   useEffect(() => {
     const SpeechRecognitionAPI =
@@ -81,7 +103,8 @@ export default function VoiceInput({
     };
 
     recognition.onerror = (event) => {
-      console.error("[VoiceInput] Erro:", event.error);
+      const errEvent = event as ErrorEvent;
+      console.error("[VoiceInput] Erro:", errEvent.message);
       setIsListening(false);
       setInterimText("");
       onListeningChange(false);

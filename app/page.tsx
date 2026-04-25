@@ -7,13 +7,6 @@ import VoiceInput from "@/components/VoiceInput";
 
 type OrbState = "idle" | "listening" | "thinking" | "speaking";
 
-// Extend window for speech synthesis
-declare global {
-  interface Window {
-    speechSynthesis: SpeechSynthesis;
-  }
-}
-
 export default function JarvisPage() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [inputText, setInputText] = useState("");
