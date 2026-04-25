@@ -2,205 +2,214 @@
 
 import { useEffect, useRef } from "react";
 
-type OrbState = "idle" | "listening" | "thinking" | "speaking";
+export type OrbState = "wake" | "listening" | "thinking" | "speaking";
 
 interface OrbProps {
   state: OrbState;
+  onClick: () => void;
 }
 
-const STATE_LABELS: Record<OrbState, string> = {
-  idle: "AGUARDANDO",
-  listening: "OUVINDO",
-  thinking: "PROCESSANDO",
-  speaking: "RESPONDENDO",
+const NUM_PARTICLES = 280;
+
+type Particle = {
+  // unit-sphere position
+  ux: number; uy: number; uz: number;
+  baseR: number;       // distance from center
+  size: number;        // dot radius
+  twinklePhase: number;
+  twinkleSpeed: number;
 };
 
-export default function Orb({ state }: OrbProps) {
+function mkParticles(): Particle[] {
+  return Array.from({ length: NUM_PARTICLES }, () => {
+    const u = Math.random();
+    const v = Math.random();
+    const theta = 2 * Math.PI * u;
+    const phi = Math.acos(2 * v - 1);
+    return {
+      ux: Math.sin(phi) * Math.cos(theta),
+      uy: Math.sin(phi) * Math.sin(theta),
+      uz: Math.cos(phi),
+      baseR: 90 + Math.random() * 110,   // bigger spread
+      size: 0.7 + Math.random() * 2.8,
+      twinklePhase: Math.random() * Math.PI * 2,
+      twinkleSpeed: 0.015 + Math.random() * 0.04,
+    };
+  });
+}
+
+export default function Orb({ state, onClick }: OrbProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const animFrameRef = useRef<number>(0);
+  const frameRef = useRef<number>(0);
   const phaseRef = useRef(0);
+  const stateRef = useRef(state);
+  const particlesRef = useRef<Particle[]>(mkParticles());
+
+  useEffect(() => { stateRef.current = state; }, [state]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
+    const S = canvas.width;
+    const CX = S / 2, CY = S / 2;
+    const particles = particlesRef.current;
 
-    const SIZE = canvas.width;
-    const CX = SIZE / 2;
-    const CY = SIZE / 2;
-
-    function getStateParams() {
-      switch (state) {
-        case "speaking":
-          return { speed: 0.12, amplitude: 18, ringCount: 5, alpha: 0.9 };
-        case "listening":
-          return { speed: 0.04, amplitude: 8, ringCount: 4, alpha: 0.7 };
-        case "thinking":
-          return { speed: 0.08, amplitude: 12, ringCount: 4, alpha: 0.8 };
-        default:
-          return { speed: 0.02, amplitude: 5, ringCount: 3, alpha: 0.6 };
-      }
-    }
+    // twinkle phases live outside draw so they accumulate
+    const twinkles = particles.map((p) => p.twinklePhase);
 
     function draw() {
-      ctx!.clearRect(0, 0, SIZE, SIZE);
-      const { speed, amplitude, ringCount, alpha } = getStateParams();
-      phaseRef.current += speed;
-      const phase = phaseRef.current;
+      ctx!.clearRect(0, 0, S, S);
+      const s = stateRef.current;
+      phaseRef.current += s === "speaking" ? 0.10 : s === "listening" ? 0.04 : s === "thinking" ? 0.06 : 0.018;
+      const ph = phaseRef.current;
 
-      // Outer expanding rings
-      for (let i = 0; i < ringCount; i++) {
-        const offset = (i / ringCount) * Math.PI * 2;
-        const pulse = Math.sin(phase + offset);
-        const radius = 90 + i * 22 + pulse * amplitude;
-        const ringAlpha = alpha * (1 - i / ringCount) * (0.5 + 0.5 * pulse);
+      // ── rotation angles ───────────────────────────────────────────
+      const rotY = ph * (s === "thinking" ? 0.55 : 0.12);
+      const rotX = ph * 0.04;
+      const cosY = Math.cos(rotY), sinY = Math.sin(rotY);
+      const cosX = Math.cos(rotX), sinX = Math.sin(rotX);
 
+      // ── speaking pulse envelope ───────────────────────────────────
+      // layered sines → feels like a real voice waveform
+      const voicePulse =
+        0.5 * Math.abs(Math.sin(ph * 3.7)) +
+        0.3 * Math.abs(Math.sin(ph * 7.1 + 1.2)) +
+        0.2 * Math.abs(Math.sin(ph * 13.3 + 2.4));
+
+      // ── central nebula glow ───────────────────────────────────────
+      const glowR = s === "speaking"
+        ? 90 + voicePulse * 80
+        : s === "listening" ? 85 + 14 * Math.sin(ph * 1.5)
+        : s === "thinking"  ? 75 + 10 * Math.sin(ph * 2.2)
+        : 65 + 8 * Math.sin(ph);
+      const glowAlpha = s === "speaking" ? 0.18 + voicePulse * 0.22
+        : s === "listening" ? 0.12 + 0.06 * Math.sin(ph)
+        : 0.07 + 0.03 * Math.sin(ph * 0.7);
+
+      const glow = ctx!.createRadialGradient(CX, CY, 0, CX, CY, glowR * 2.8);
+      glow.addColorStop(0,   `rgba(255,255,255,${glowAlpha})`);
+      glow.addColorStop(0.4, `rgba(200,210,255,${glowAlpha * 0.4})`);
+      glow.addColorStop(1,   "transparent");
+      ctx!.beginPath();
+      ctx!.arc(CX, CY, glowR * 2.8, 0, Math.PI * 2);
+      ctx!.fillStyle = glow;
+      ctx!.fill();
+
+      // ── draw particles ────────────────────────────────────────────
+      for (let i = 0; i < particles.length; i++) {
+        const p = particles[i];
+
+        // rotate unit-sphere coords
+        let x = p.ux, y = p.uy, z = p.uz;
+        // rotate Y
+        const x1 = x * cosY + z * sinY;
+        const z1 = -x * sinY + z * cosY;
+        // rotate X
+        const y2 = y * cosX - z1 * sinX;
+        const z2 = y * sinX + z1 * cosX;
+        x = x1; y = y2; z = z2;
+
+        // speaking: expand radius with voice pulse
+        let r = p.baseR;
+        if (s === "speaking") {
+          const burst = Math.abs(Math.sin(ph * 4.5 + i * 0.27)) * voicePulse;
+          r += burst * 30;
+        } else if (s === "listening") {
+          r += 5 * Math.sin(ph * 1.8 + i * 0.3);
+        } else if (s === "thinking") {
+          // orbit: pull toward equatorial plane
+          r += 8 * Math.sin(ph * 2 + i * 0.5) * (1 - Math.abs(z));
+        }
+
+        // project (simple perspective)
+        const fov = 320;
+        const depth = fov / (fov + z * r * 0.6);
+        const sx = CX + x * r * depth;
+        const sy = CY + y * r * depth;
+
+        // brightness by depth
+        const depthBright = 0.4 + 0.6 * ((z + 1) / 2);
+
+        // twinkle
+        twinkles[i] += p.twinkleSpeed;
+        const tw = 0.55 + 0.45 * Math.sin(twinkles[i]);
+
+        // state brightness
+        const stBright = s === "speaking" ? 0.85 + voicePulse * 0.15
+          : s === "listening" ? 0.75 + 0.15 * Math.sin(ph + i * 0.2)
+          : s === "thinking"  ? 0.65 + 0.15 * Math.sin(ph * 1.5 + i * 0.3)
+          : 0.5 + 0.1 * Math.sin(ph * 0.5 + i * 0.4);
+
+        const alpha = tw * depthBright * stBright;
+        const starSize = p.size * depth * depthBright * (s === "speaking" ? 1 + voicePulse * 0.6 : 1);
+
+        // draw star dot (with tiny cross flare for bright ones)
         ctx!.beginPath();
-        ctx!.arc(CX, CY, radius, 0, Math.PI * 2);
-        ctx!.strokeStyle =
-          state === "speaking"
-            ? `rgba(0, 212, 255, ${ringAlpha})`
-            : `rgba(0, 180, 220, ${ringAlpha * 0.7})`;
-        ctx!.lineWidth = state === "speaking" ? 2 : 1;
-        ctx!.stroke();
-      }
+        ctx!.arc(sx, sy, Math.max(0.3, starSize), 0, Math.PI * 2);
+        ctx!.fillStyle = `rgba(255,255,255,${Math.min(1, alpha)})`;
+        ctx!.fill();
 
-      // Gold accent ring (rotates)
-      const goldRadius = 75 + Math.sin(phase * 1.3) * 6;
-      ctx!.beginPath();
-      ctx!.arc(CX, CY, goldRadius, 0, Math.PI * 2);
-      ctx!.strokeStyle = `rgba(255, 215, 0, ${0.2 + 0.15 * Math.sin(phase)})`;
-      ctx!.lineWidth = 1;
-      ctx!.stroke();
-
-      // Core orb gradient
-      const coreRadius = 60 + Math.sin(phase * 2) * (state === "speaking" ? 8 : 3);
-      const grad = ctx!.createRadialGradient(
-        CX - coreRadius * 0.2,
-        CY - coreRadius * 0.2,
-        0,
-        CX,
-        CY,
-        coreRadius
-      );
-      grad.addColorStop(0, "rgba(255,255,255,0.95)");
-      grad.addColorStop(0.2, "rgba(100, 230, 255, 0.9)");
-      grad.addColorStop(0.5, "rgba(0, 180, 255, 0.85)");
-      grad.addColorStop(0.8, "rgba(0, 80, 180, 0.7)");
-      grad.addColorStop(1, "rgba(0, 20, 80, 0)");
-
-      ctx!.beginPath();
-      ctx!.arc(CX, CY, coreRadius, 0, Math.PI * 2);
-      ctx!.fillStyle = grad;
-      ctx!.fill();
-
-      // Core glow
-      const glowGrad = ctx!.createRadialGradient(CX, CY, 0, CX, CY, coreRadius * 1.8);
-      const glowAlpha = state === "speaking" ? 0.5 : 0.25;
-      glowGrad.addColorStop(0, `rgba(0, 212, 255, ${glowAlpha})`);
-      glowGrad.addColorStop(1, "transparent");
-      ctx!.beginPath();
-      ctx!.arc(CX, CY, coreRadius * 1.8, 0, Math.PI * 2);
-      ctx!.fillStyle = glowGrad;
-      ctx!.fill();
-
-      // Specular highlight
-      const hlGrad = ctx!.createRadialGradient(
-        CX - coreRadius * 0.3,
-        CY - coreRadius * 0.35,
-        0,
-        CX - coreRadius * 0.2,
-        CY - coreRadius * 0.2,
-        coreRadius * 0.45
-      );
-      hlGrad.addColorStop(0, "rgba(255,255,255,0.6)");
-      hlGrad.addColorStop(1, "transparent");
-      ctx!.beginPath();
-      ctx!.arc(
-        CX - coreRadius * 0.2,
-        CY - coreRadius * 0.25,
-        coreRadius * 0.45,
-        0,
-        Math.PI * 2
-      );
-      ctx!.fillStyle = hlGrad;
-      ctx!.fill();
-
-      // Waveform arcs when speaking
-      if (state === "speaking" || state === "listening") {
-        const bars = 24;
-        for (let i = 0; i < bars; i++) {
-          const angle = (i / bars) * Math.PI * 2 - Math.PI / 2;
-          const barHeight =
-            8 + Math.abs(Math.sin(phase * 3 + i * 0.5)) * (state === "speaking" ? 22 : 10);
-          const innerR = coreRadius + 4;
-          const outerR = innerR + barHeight;
-          const barAlpha = state === "speaking" ? 0.8 : 0.5;
-
+        // cross flare on brightest stars
+        if (starSize > 1.8 && alpha > 0.7) {
+          const fl = starSize * 2.5;
+          ctx!.strokeStyle = `rgba(255,255,255,${alpha * 0.35})`;
+          ctx!.lineWidth = 0.5;
           ctx!.beginPath();
-          ctx!.moveTo(
-            CX + Math.cos(angle) * innerR,
-            CY + Math.sin(angle) * innerR
-          );
-          ctx!.lineTo(
-            CX + Math.cos(angle) * outerR,
-            CY + Math.sin(angle) * outerR
-          );
-          ctx!.strokeStyle =
-            state === "speaking"
-              ? `rgba(0, 212, 255, ${barAlpha})`
-              : `rgba(0, 180, 220, ${barAlpha})`;
-          ctx!.lineWidth = 2;
+          ctx!.moveTo(sx - fl, sy); ctx!.lineTo(sx + fl, sy);
+          ctx!.moveTo(sx, sy - fl); ctx!.lineTo(sx, sy + fl);
           ctx!.stroke();
         }
       }
 
-      animFrameRef.current = requestAnimationFrame(draw);
+      // ── thinking: rotating arc rings ─────────────────────────────
+      if (s === "thinking") {
+        ctx!.save();
+        ctx!.translate(CX, CY);
+        for (let ring = 0; ring < 2; ring++) {
+          ctx!.rotate(ring === 0 ? ph * 1.1 : -ph * 0.7);
+          ctx!.beginPath();
+          ctx!.arc(0, 0, 110 + ring * 36, 0, Math.PI * (0.9 + ring * 0.4));
+          ctx!.strokeStyle = `rgba(255,255,255,${0.22 - ring * 0.06})`;
+          ctx!.lineWidth = 1.5;
+          ctx!.setLineDash([6, 14]);
+          ctx!.stroke();
+          ctx!.setLineDash([]);
+          ctx!.rotate(ring === 0 ? -(ph * 1.1) : ph * 0.7);
+        }
+        ctx!.restore();
+      }
+
+      // ── listening: radial pulse ring ─────────────────────────────
+      if (s === "listening") {
+        const ringR = 160 + 16 * Math.sin(ph * 2);
+        ctx!.beginPath();
+        ctx!.arc(CX, CY, ringR, 0, Math.PI * 2);
+        ctx!.strokeStyle = `rgba(255,255,255,${0.12 + 0.1 * Math.sin(ph * 2)})`;
+        ctx!.lineWidth = 1;
+        ctx!.stroke();
+      }
+
+      frameRef.current = requestAnimationFrame(draw);
     }
 
     draw();
-    return () => cancelAnimationFrame(animFrameRef.current);
-  }, [state]);
+    return () => cancelAnimationFrame(frameRef.current);
+  }, []);
 
   return (
-    <div className="flex flex-col items-center gap-4 select-none">
-      {/* Canvas orb */}
-      <div className="relative">
-        <canvas
-          ref={canvasRef}
-          width={300}
-          height={300}
-          className="block"
-          style={{ filter: state === "speaking" ? "drop-shadow(0 0 24px #00d4ff)" : "drop-shadow(0 0 12px #00d4ff88)" }}
-        />
-      </div>
-
-      {/* State label */}
-      <div className="flex items-center gap-2">
-        <span
-          className="block w-2 h-2 rounded-full"
-          style={{
-            background: state === "speaking" ? "#00d4ff" : state === "listening" ? "#ffd700" : "#00d4ff44",
-            boxShadow:
-              state === "idle"
-                ? "none"
-                : `0 0 8px ${state === "listening" ? "#ffd700" : "#00d4ff"}`,
-          }}
-        />
-        <span
-          className="font-tech text-xs tracking-[0.3em]"
-          style={{
-            color: state === "listening" ? "#ffd700" : "#00d4ff",
-            textShadow: `0 0 10px ${state === "listening" ? "rgba(255,215,0,0.6)" : "rgba(0,212,255,0.6)"}`,
-          }}
-        >
-          {STATE_LABELS[state]}
-        </span>
-        {(state === "thinking") && (
-          <span className="font-tech text-xs text-jarvis-cyan blink">_</span>
-        )}
-      </div>
-    </div>
+    <canvas
+      ref={canvasRef}
+      width={800}
+      height={800}
+      onClick={onClick}
+      style={{
+        cursor: "pointer",
+        display: "block",
+        width:  "min(800px, 95vw)",
+        height: "min(800px, 95vh)",
+      }}
+    />
   );
 }

@@ -1,313 +1,331 @@
 "use client";
 
-import { useState, useRef, useCallback, useEffect } from "react";
-import Orb from "@/components/Orb";
-import ChatHistory, { Message } from "@/components/ChatHistory";
-import VoiceInput from "@/components/VoiceInput";
+import { useState, useRef, useEffect } from "react";
+import Orb, { OrbState } from "@/components/Orb";
 
-type OrbState = "idle" | "listening" | "thinking" | "speaking";
+// ── Speech Recognition types ──────────────────────────────────────────────
+interface ISpeechRecognitionEvent extends Event {
+  resultIndex: number;
+  results: SpeechRecognitionResultList;
+}
+interface ISpeechRecognition extends EventTarget {
+  lang: string;
+  interimResults: boolean;
+  continuous: boolean;
+  maxAlternatives: number;
+  start(): void;
+  stop(): void;
+  abort(): void;
+  onstart:  ((ev: Event) => void) | null;
+  onresult: ((ev: ISpeechRecognitionEvent) => void) | null;
+  onerror:  ((ev: Event) => void) | null;
+  onend:    ((ev: Event) => void) | null;
+}
+interface ISpeechRecognitionCtor { new(): ISpeechRecognition; }
+declare global {
+  interface Window {
+    SpeechRecognition: ISpeechRecognitionCtor;
+    webkitSpeechRecognition: ISpeechRecognitionCtor;
+  }
+}
+
+type Mode = "init" | "wake" | "listening" | "thinking" | "speaking";
+interface Message { role: "user" | "assistant"; content: string; }
+
+const WAKE_WORDS = ["jarvis", "olá jarvis", "ola jarvis", "hey jarvis", "ei jarvis"];
+
+function getSpeechAPI(): ISpeechRecognitionCtor | null {
+  if (typeof window === "undefined") return null;
+  return window.SpeechRecognition || window.webkitSpeechRecognition || null;
+}
+
+// Pick the best available voice for Jarvis — British male preferred,
+// falls back gracefully to whatever the browser has.
+function pickVoice(): SpeechSynthesisVoice | null {
+  const voices = window.speechSynthesis.getVoices();
+  const prefer = [
+    // Chrome on any OS
+    (v: SpeechSynthesisVoice) => v.name === "Google UK English Male",
+    (v: SpeechSynthesisVoice) => v.name === "Google UK English Female",
+    // macOS built-in British
+    (v: SpeechSynthesisVoice) => v.name === "Daniel",
+    (v: SpeechSynthesisVoice) => v.name === "Malcolm",
+    (v: SpeechSynthesisVoice) => v.name === "Oliver",
+    // Windows
+    (v: SpeechSynthesisVoice) => v.name.includes("Microsoft George"),
+    (v: SpeechSynthesisVoice) => v.name.includes("Microsoft David"),
+    // Any British/UK voice
+    (v: SpeechSynthesisVoice) => v.lang === "en-GB",
+    // Any English voice as last resort
+    (v: SpeechSynthesisVoice) => v.lang.startsWith("en"),
+  ];
+  for (const fn of prefer) {
+    const match = voices.find(fn);
+    if (match) return match;
+  }
+  return null;
+}
 
 export default function JarvisPage() {
-  const [messages, setMessages] = useState<Message[]>([]);
-  const [inputText, setInputText] = useState("");
-  const [orbState, setOrbState] = useState<OrbState>("idle");
-  const [isThinking, setIsThinking] = useState(false);
-  const inputRef = useRef<HTMLInputElement>(null);
-  const utteranceRef = useRef<SpeechSynthesisUtterance | null>(null);
+  const [orbState, setOrbState] = useState<OrbState>("wake");
 
-  // Stop any ongoing speech
-  const stopSpeaking = useCallback(() => {
-    if (typeof window !== "undefined" && window.speechSynthesis) {
-      window.speechSynthesis.cancel();
-    }
-  }, []);
+  const modeRef       = useRef<Mode>("init");
+  const messagesRef   = useRef<Message[]>([]);
+  const wakeRecRef    = useRef<ISpeechRecognition | null>(null);
+  const activeRecRef  = useRef<ISpeechRecognition | null>(null);
+  const restartRef    = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const ttsReadyRef   = useRef(false); // true after first user gesture
+  const micReadyRef   = useRef(false);
 
-  // Speak a response using the Web Speech API
-  const speak = useCallback(
-    (text: string) => {
-      if (typeof window === "undefined" || !window.speechSynthesis) return;
+  function setMode(m: Mode) {
+    modeRef.current = m;
+    const visual: OrbState =
+      m === "speaking"  ? "speaking"  :
+      m === "thinking"  ? "thinking"  :
+      m === "listening" ? "listening" : "wake";
+    setOrbState(visual);
+  }
 
-      stopSpeaking();
+  function clearTimer() {
+    if (restartRef.current) { clearTimeout(restartRef.current); restartRef.current = null; }
+  }
 
-      const utterance = new SpeechSynthesisUtterance(text);
-      utterance.lang = "pt-BR";
-      utterance.rate = 0.95;
-      utterance.pitch = 0.9;
-      utterance.volume = 1;
+  // ── Unlock speechSynthesis — MUST run inside a user gesture ──────────
+  function unlockTTS() {
+    if (ttsReadyRef.current) return;
+    ttsReadyRef.current = true;
+    const synth = window.speechSynthesis;
+    if (!synth) return;
+    synth.getVoices(); // trigger voice load
+    synth.onvoiceschanged = () => synth.getVoices();
+    // Speak a zero-volume utterance to permanently unlock TTS for this page
+    const u = new SpeechSynthesisUtterance(" ");
+    u.volume = 0;
+    synth.speak(u);
+  }
 
-      // Try to pick a Portuguese voice
-      const voices = window.speechSynthesis.getVoices();
-      const ptVoice = voices.find(
-        (v) =>
-          v.lang.startsWith("pt") &&
-          (v.name.toLowerCase().includes("male") ||
-            !v.name.toLowerCase().includes("female"))
-      );
-      if (ptVoice) utterance.voice = ptVoice;
+  // ── TTS via speechSynthesis ───────────────────────────────────────────
+  function speak(text: string, onDone: () => void) {
+    const synth = window.speechSynthesis;
+    if (!synth) { onDone(); return; }
 
-      utterance.onstart = () => setOrbState("speaking");
-      utterance.onend = () => setOrbState("idle");
-      utterance.onerror = () => setOrbState("idle");
+    // Cancel anything currently playing, then wait one tick
+    synth.cancel();
 
-      utteranceRef.current = utterance;
-      window.speechSynthesis.speak(utterance);
-    },
-    [stopSpeaking]
-  );
+    setTimeout(() => {
+      const u = new SpeechSynthesisUtterance(text);
 
-  // Ensure voices are loaded
-  useEffect(() => {
-    if (typeof window !== "undefined" && window.speechSynthesis) {
-      window.speechSynthesis.getVoices();
-      window.speechSynthesis.onvoiceschanged = () => {
-        window.speechSynthesis.getVoices();
-      };
-    }
-  }, []);
-
-  const sendMessage = useCallback(
-    async (text: string) => {
-      if (!text.trim() || isThinking) return;
-
-      stopSpeaking();
-
-      const userMessage: Message = {
-        role: "user",
-        content: text.trim(),
-        timestamp: new Date(),
-      };
-
-      setMessages((prev) => [...prev, userMessage]);
-      setInputText("");
-      setIsThinking(true);
-      setOrbState("thinking");
-
-      try {
-        // Build history for the API (last 20 messages for context)
-        const history = [...messages, userMessage].slice(-20).map((m) => ({
-          role: m.role,
-          content: m.content,
-        }));
-
-        const res = await fetch("/api/chat", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ messages: history }),
-        });
-
-        const data = await res.json();
-
-        if (!res.ok) {
-          throw new Error(data.error || `HTTP ${res.status}`);
-        }
-
-        const assistantMessage: Message = {
-          role: "assistant",
-          content: data.reply,
-          timestamp: new Date(),
-        };
-
-        setMessages((prev) => [...prev, assistantMessage]);
-        setIsThinking(false);
-
-        // Speak the response
-        speak(data.reply);
-      } catch (err: unknown) {
-        console.error("[Jarvis] Erro na requisição:", err);
-        const errMsg =
-          err instanceof Error ? err.message : "Falha na comunicação.";
-        setMessages((prev) => [
-          ...prev,
-          {
-            role: "assistant",
-            content: `Desculpe, encontrei um problema: ${errMsg}`,
-            timestamp: new Date(),
-          },
-        ]);
-        setIsThinking(false);
-        setOrbState("idle");
+      // Voice: British male preferred (Jarvis-like), any English as fallback
+      const voice = pickVoice();
+      if (voice) {
+        u.voice = voice;
+        u.lang  = voice.lang;
+      } else {
+        u.lang = "en-GB";
       }
-    },
-    [messages, isThinking, speak, stopSpeaking]
-  );
 
-  const handleVoiceTranscript = useCallback(
-    (text: string) => {
-      sendMessage(text);
-    },
-    [sendMessage]
-  );
+      // Natural-sounding prosody — not too fast, slightly lower pitch
+      u.rate   = 0.88;   // deliberate pace
+      u.pitch  = 0.9;    // slightly lower = more authoritative
+      u.volume = 1;
 
-  const handleListeningChange = useCallback((listening: boolean) => {
-    setOrbState(listening ? "listening" : "idle");
-  }, []);
+      u.onstart = () => setMode("speaking");
+      u.onend   = () => { onDone(); };
+      u.onerror = (e) => {
+        console.error("[TTS]", (e as SpeechSynthesisErrorEvent).error);
+        onDone();
+      };
 
-  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
-      sendMessage(inputText);
+      synth.speak(u);
+    }, 80);
+  }
+
+  function stopSpeaking() {
+    window.speechSynthesis?.cancel();
+  }
+
+  // ── Wake word listener ────────────────────────────────────────────────
+  function startWakeListener() {
+    clearTimer();
+    if (modeRef.current !== "wake") return;
+    const API = getSpeechAPI();
+    if (!API) return;
+
+    try { wakeRecRef.current?.abort(); } catch { /* ok */ }
+    wakeRecRef.current = null;
+
+    const rec = new API();
+    rec.lang            = "pt-BR";
+    rec.interimResults  = true;
+    rec.continuous      = true;
+    rec.maxAlternatives = 1;
+    wakeRecRef.current  = rec;
+
+    rec.onresult = (ev) => {
+      for (let i = ev.resultIndex; i < ev.results.length; i++) {
+        const t = ev.results[i][0].transcript.toLowerCase().trim();
+        if (WAKE_WORDS.some((w) => t.includes(w))) {
+          try { rec.abort(); } catch { /* ok */ }
+          wakeRecRef.current = null;
+          clearTimer();
+          restartRef.current = setTimeout(() => startActiveListener(), 120);
+          return;
+        }
+      }
+    };
+
+    rec.onerror = () => {
+      if (modeRef.current === "wake")
+        restartRef.current = setTimeout(() => startWakeListener(), 600);
+    };
+
+    rec.onend = () => {
+      if (modeRef.current === "wake")
+        restartRef.current = setTimeout(() => startWakeListener(), 300);
+    };
+
+    try { rec.start(); } catch (e) { console.error("[wake] start failed:", e); }
+  }
+
+  // ── Active (command) listener ─────────────────────────────────────────
+  function startActiveListener() {
+    if (modeRef.current === "thinking" || modeRef.current === "speaking") return;
+    const API = getSpeechAPI();
+    if (!API) return;
+
+    setMode("listening");
+    const rec = new API();
+    rec.lang            = "pt-BR";
+    rec.interimResults  = false;
+    rec.continuous      = false;
+    rec.maxAlternatives = 1;
+    activeRecRef.current = rec;
+
+    rec.onresult = (ev) => {
+      const transcript = ev.results[0][0].transcript.trim();
+      if (transcript) {
+        sendToJarvis(transcript);
+      } else {
+        setMode("wake");
+        startWakeListener();
+      }
+    };
+
+    rec.onerror = () => { setMode("wake"); startWakeListener(); };
+
+    rec.onend = () => {
+      if (modeRef.current === "listening") { setMode("wake"); startWakeListener(); }
+    };
+
+    try { rec.start(); }
+    catch (e) { console.error("[active] start failed:", e); setMode("wake"); startWakeListener(); }
+  }
+
+  // ── Send to Groq ──────────────────────────────────────────────────────
+  async function sendToJarvis(text: string) {
+    setMode("thinking");
+
+    const history: Message[] = [
+      ...messagesRef.current,
+      { role: "user", content: text },
+    ];
+    messagesRef.current = history;
+
+    try {
+      const res = await fetch("/api/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          messages: history.slice(-20).map((m) => ({
+            role: m.role,
+            content: m.content,
+          })),
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
+
+      const reply = data.reply as string;
+      messagesRef.current = [...history, { role: "assistant", content: reply }];
+
+      speak(reply, () => { setMode("wake"); startWakeListener(); });
+    } catch (err) {
+      console.error("[jarvis]", err);
+      speak("Desculpe, houve um problema na comunicação.", () => {
+        setMode("wake");
+        startWakeListener();
+      });
     }
-  };
+  }
 
-  const isDisabled = isThinking || orbState === "speaking";
+  // ── Orb click ─────────────────────────────────────────────────────────
+  function handleOrbClick() {
+    // ALWAYS unlock TTS on any click — Chrome requires a user gesture.
+    unlockTTS();
+
+    if (!micReadyRef.current) {
+      micReadyRef.current = true;
+      setMode("wake");
+      startWakeListener();
+      return;
+    }
+
+    const m = modeRef.current;
+
+    if (m === "speaking") {
+      stopSpeaking();
+      setMode("wake");
+      startWakeListener();
+      return;
+    }
+    if (m === "thinking") return;
+    if (m === "listening") {
+      try { activeRecRef.current?.abort(); } catch { /* ok */ }
+      setMode("wake");
+      startWakeListener();
+      return;
+    }
+
+    // wake → activate directly without wake word
+    clearTimer();
+    try { wakeRecRef.current?.abort(); } catch { /* ok */ }
+    wakeRecRef.current = null;
+    restartRef.current = setTimeout(() => startActiveListener(), 120);
+  }
+
+  // ── Mount ─────────────────────────────────────────────────────────────
+  useEffect(() => {
+    const t = setTimeout(() => {
+      if (!micReadyRef.current) {
+        micReadyRef.current = true;
+        setMode("wake");
+        startWakeListener();
+      }
+    }, 500);
+
+    // Chrome TTS keepalive — prevents synthesis from silently dying
+    const keepalive = setInterval(() => {
+      if (window.speechSynthesis?.speaking) {
+        window.speechSynthesis.pause();
+        window.speechSynthesis.resume();
+      }
+    }, 10_000);
+
+    return () => {
+      clearTimeout(t);
+      clearTimer();
+      clearInterval(keepalive);
+      try { wakeRecRef.current?.abort(); } catch { /* ok */ }
+      try { activeRecRef.current?.abort(); } catch { /* ok */ }
+      stopSpeaking();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   return (
-    <main className="relative min-h-screen bg-jarvis-dark bg-grid overflow-hidden flex flex-col">
-      {/* Ambient background glow */}
-      <div
-        className="pointer-events-none absolute inset-0"
-        style={{
-          background:
-            "radial-gradient(ellipse 60% 50% at 50% 0%, rgba(0,212,255,0.07) 0%, transparent 70%)",
-        }}
-      />
-
-      {/* Scan line overlay */}
-      <div className="pointer-events-none absolute inset-0 scanline opacity-30" />
-
-      {/* Header */}
-      <header className="relative z-10 flex items-center justify-between px-6 py-4 border-b border-jarvis-cyan/10">
-        <div className="flex items-center gap-3">
-          {/* Corner bracket decoration */}
-          <div className="relative w-8 h-8">
-            <span className="absolute top-0 left-0 w-3 h-3 border-t-2 border-l-2 border-jarvis-cyan/60" />
-            <span className="absolute bottom-0 right-0 w-3 h-3 border-b-2 border-r-2 border-jarvis-cyan/60" />
-          </div>
-          <div>
-            <h1
-              className="font-tech text-lg sm:text-xl tracking-[0.25em] leading-none"
-              style={{
-                color: "#00d4ff",
-                textShadow:
-                  "0 0 10px rgba(0,212,255,0.7), 0 0 30px rgba(0,212,255,0.3)",
-              }}
-            >
-              J.A.R.V.I.S
-            </h1>
-            <p className="font-mono text-[9px] tracking-widest text-jarvis-cyan/40 mt-0.5">
-              JUST A RATHER VERY INTELLIGENT SYSTEM
-            </p>
-          </div>
-        </div>
-
-        {/* Status indicators */}
-        <div className="hidden sm:flex items-center gap-4">
-          {(["NÚCLEO", "API", "VOZ"] as const).map((label) => (
-            <div key={label} className="flex items-center gap-1.5">
-              <span
-                className="w-1.5 h-1.5 rounded-full bg-jarvis-cyan"
-                style={{ boxShadow: "0 0 6px #00d4ff" }}
-              />
-              <span className="font-mono text-[9px] tracking-widest text-jarvis-cyan/50">
-                {label}
-              </span>
-            </div>
-          ))}
-        </div>
-      </header>
-
-      {/* Main content */}
-      <div className="relative z-10 flex flex-col lg:flex-row flex-1 overflow-hidden">
-        {/* Left panel — Orb */}
-        <div className="flex flex-col items-center justify-center px-6 py-6 lg:py-0 lg:w-[340px] lg:border-r border-jarvis-cyan/10 shrink-0">
-          <Orb state={orbState} />
-
-          {/* Quick stats */}
-          <div className="mt-6 grid grid-cols-3 gap-4 w-full max-w-[280px]">
-            {[
-              { label: "MODELO", value: "LLAMA3-70B" },
-              { label: "IDIOMA", value: "PT-BR" },
-              { label: "MEMÓRIA", value: `${messages.length} MSG` },
-            ].map((stat) => (
-              <div key={stat.label} className="text-center">
-                <p className="font-mono text-[8px] text-jarvis-cyan/30 tracking-widest mb-1">
-                  {stat.label}
-                </p>
-                <p className="font-tech text-[10px] text-jarvis-cyan/70">
-                  {stat.value}
-                </p>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        {/* Right panel — Chat */}
-        <div className="flex flex-col flex-1 overflow-hidden">
-          {/* Chat history */}
-          <div className="flex-1 overflow-y-auto px-4 sm:px-6 py-4">
-            <ChatHistory messages={messages} isThinking={isThinking} />
-          </div>
-
-          {/* Divider */}
-          <div className="border-t border-jarvis-cyan/10 mx-4 sm:mx-6" />
-
-          {/* Input area */}
-          <div className="px-4 sm:px-6 py-4">
-            <div
-              className="flex items-center gap-3 rounded-lg border border-jarvis-cyan/20 bg-jarvis-blue/30 px-4 py-3 transition-all duration-300"
-              style={{
-                boxShadow: isDisabled
-                  ? undefined
-                  : "0 0 0 0 transparent",
-              }}
-            >
-              {/* Voice input button */}
-              <VoiceInput
-                onTranscript={handleVoiceTranscript}
-                onListeningChange={handleListeningChange}
-                disabled={isDisabled}
-              />
-
-              {/* Separator */}
-              <div className="w-px h-6 bg-jarvis-cyan/20" />
-
-              {/* Text input */}
-              <input
-                ref={inputRef}
-                type="text"
-                value={inputText}
-                onChange={(e) => setInputText(e.target.value)}
-                onKeyDown={handleKeyDown}
-                disabled={isDisabled}
-                placeholder={
-                  isThinking
-                    ? "Processando..."
-                    : orbState === "speaking"
-                    ? "J.A.R.V.I.S está falando..."
-                    : "Digite ou use o microfone..."
-                }
-                className="input-jarvis flex-1 bg-transparent font-mono text-sm text-jarvis-cyan/90 placeholder:text-jarvis-cyan/25 border-none focus:outline-none disabled:opacity-30 disabled:cursor-not-allowed"
-              />
-
-              {/* Send button */}
-              <button
-                onClick={() => sendMessage(inputText)}
-                disabled={isDisabled || !inputText.trim()}
-                className="flex items-center justify-center w-9 h-9 rounded border border-jarvis-cyan/30 text-jarvis-cyan/60 hover:text-jarvis-cyan hover:border-jarvis-cyan hover:bg-jarvis-cyan/10 transition-all duration-200 disabled:opacity-20 disabled:cursor-not-allowed focus:outline-none"
-                title="Enviar"
-              >
-                <svg
-                  className="w-4 h-4"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                >
-                  <line x1="22" y1="2" x2="11" y2="13" />
-                  <polygon points="22 2 15 22 11 13 2 9 22 2" />
-                </svg>
-              </button>
-            </div>
-
-            {/* Footer hint */}
-            <p className="mt-2 font-mono text-[9px] text-jarvis-cyan/20 text-center tracking-widest">
-              ENTER para enviar · MICROFONE para voz · GROQ llama3-70b-8192
-            </p>
-          </div>
-        </div>
-      </div>
+    <main className="fixed inset-0 flex items-center justify-center bg-black">
+      <Orb state={orbState} onClick={handleOrbClick} />
     </main>
   );
 }
