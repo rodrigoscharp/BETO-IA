@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "groq-sdk": "^0.7.0",
+    "msedge-tts": "^2.0.5",
     "next": "^14.2.30",
     "react": "^18",
     "react-dom": "^18"

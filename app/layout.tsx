@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "J.A.R.V.I.S — Assistente Pessoal Inteligente",
+  title: "Jarvis",
   description:
     "Just A Rather Very Intelligent System — Assistente pessoal de voz e texto alimentado por IA.",
   icons: {

@@ -9,13 +9,12 @@ interface OrbProps {
   onClick: () => void;
 }
 
-const NUM_PARTICLES = 280;
+const NUM_PARTICLES = 380;
 
 type Particle = {
-  // unit-sphere position
   ux: number; uy: number; uz: number;
-  baseR: number;       // distance from center
-  size: number;        // dot radius
+  baseR: number;
+  size: number;
   twinklePhase: number;
   twinkleSpeed: number;
 };
@@ -25,25 +24,26 @@ function mkParticles(): Particle[] {
     const u = Math.random();
     const v = Math.random();
     const theta = 2 * Math.PI * u;
-    const phi = Math.acos(2 * v - 1);
+    const phi   = Math.acos(2 * v - 1);
     return {
       ux: Math.sin(phi) * Math.cos(theta),
       uy: Math.sin(phi) * Math.sin(theta),
       uz: Math.cos(phi),
-      baseR: 90 + Math.random() * 110,   // bigger spread
-      size: 0.7 + Math.random() * 2.8,
+      baseR: 105 + Math.random() * 30,   // tight shell — matches reference
+      size:  0.9 + Math.random() * 2.2,
       twinklePhase: Math.random() * Math.PI * 2,
-      twinkleSpeed: 0.015 + Math.random() * 0.04,
+      twinkleSpeed: 0.01 + Math.random() * 0.03,
     };
   });
 }
 
 export default function Orb({ state, onClick }: OrbProps) {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const frameRef = useRef<number>(0);
-  const phaseRef = useRef(0);
-  const stateRef = useRef(state);
-  const particlesRef = useRef<Particle[]>(mkParticles());
+  const canvasRef   = useRef<HTMLCanvasElement>(null);
+  const frameRef    = useRef<number>(0);
+  const phaseRef    = useRef(0);
+  const stateRef    = useRef(state);
+  const particles   = useRef<Particle[]>(mkParticles());
+  const twinkles    = useRef<number[]>(particles.current.map(p => p.twinklePhase));
 
   useEffect(() => { stateRef.current = state; }, [state]);
 
@@ -54,55 +54,57 @@ export default function Orb({ state, onClick }: OrbProps) {
     if (!ctx) return;
     const S = canvas.width;
     const CX = S / 2, CY = S / 2;
-    const particles = particlesRef.current;
-
-    // twinkle phases live outside draw so they accumulate
-    const twinkles = particles.map((p) => p.twinklePhase);
+    const pts = particles.current;
+    const tw  = twinkles.current;
 
     function draw() {
       ctx!.clearRect(0, 0, S, S);
       const s = stateRef.current;
-      phaseRef.current += s === "speaking" ? 0.10 : s === "listening" ? 0.04 : s === "thinking" ? 0.06 : 0.018;
+
+      // phase speed per state
+      phaseRef.current +=
+        s === "speaking"  ? 0.09 :
+        s === "listening" ? 0.035 :
+        s === "thinking"  ? 0.055 : 0.018;
       const ph = phaseRef.current;
 
-      // ── rotation angles ───────────────────────────────────────────
-      const rotY = ph * (s === "thinking" ? 0.55 : 0.12);
-      const rotX = ph * 0.04;
+      // rotation
+      const rotY = ph * (s === "thinking" ? 0.6 : 0.14);
+      const rotX = ph * 0.05;
       const cosY = Math.cos(rotY), sinY = Math.sin(rotY);
       const cosX = Math.cos(rotX), sinX = Math.sin(rotX);
 
-      // ── speaking pulse envelope ───────────────────────────────────
-      // layered sines → feels like a real voice waveform
-      const voicePulse =
+      // voice pulse envelope (speaking)
+      const vp =
         0.5 * Math.abs(Math.sin(ph * 3.7)) +
         0.3 * Math.abs(Math.sin(ph * 7.1 + 1.2)) +
         0.2 * Math.abs(Math.sin(ph * 13.3 + 2.4));
 
-      // ── central nebula glow ───────────────────────────────────────
-      const glowR = s === "speaking"
-        ? 90 + voicePulse * 80
-        : s === "listening" ? 85 + 14 * Math.sin(ph * 1.5)
-        : s === "thinking"  ? 75 + 10 * Math.sin(ph * 2.2)
-        : 65 + 8 * Math.sin(ph);
-      const glowAlpha = s === "speaking" ? 0.18 + voicePulse * 0.22
-        : s === "listening" ? 0.12 + 0.06 * Math.sin(ph)
-        : 0.07 + 0.03 * Math.sin(ph * 0.7);
+      // very subtle central glow — matches reference (barely visible)
+      const glowR = s === "speaking" ? 80 + vp * 55
+        : s === "listening" ? 70 + 10 * Math.sin(ph * 1.5)
+        : s === "thinking"  ? 65 +  8 * Math.sin(ph * 2.0)
+        : 55 + 5 * Math.sin(ph * 0.8);
 
-      const glow = ctx!.createRadialGradient(CX, CY, 0, CX, CY, glowR * 2.8);
-      glow.addColorStop(0,   `rgba(255,255,255,${glowAlpha})`);
-      glow.addColorStop(0.4, `rgba(200,210,255,${glowAlpha * 0.4})`);
-      glow.addColorStop(1,   "transparent");
+      const glowAlpha = s === "speaking" ? 0.09 + vp * 0.10
+        : s === "listening" ? 0.06
+        : s === "thinking"  ? 0.05
+        : 0.04;
+
+      const grd = ctx!.createRadialGradient(CX, CY, 0, CX, CY, glowR * 2.2);
+      grd.addColorStop(0,   `rgba(180,210,255,${glowAlpha})`);
+      grd.addColorStop(0.5, `rgba(140,180,255,${glowAlpha * 0.3})`);
+      grd.addColorStop(1,   "transparent");
       ctx!.beginPath();
-      ctx!.arc(CX, CY, glowR * 2.8, 0, Math.PI * 2);
-      ctx!.fillStyle = glow;
+      ctx!.arc(CX, CY, glowR * 2.2, 0, Math.PI * 2);
+      ctx!.fillStyle = grd;
       ctx!.fill();
 
-      // ── draw particles ────────────────────────────────────────────
-      for (let i = 0; i < particles.length; i++) {
-        const p = particles[i];
-
-        // rotate unit-sphere coords
+      // particles
+      for (let i = 0; i < pts.length; i++) {
+        const p = pts[i];
         let x = p.ux, y = p.uy, z = p.uz;
+
         // rotate Y
         const x1 = x * cosY + z * sinY;
         const z1 = -x * sinY + z * cosY;
@@ -111,83 +113,71 @@ export default function Orb({ state, onClick }: OrbProps) {
         const z2 = y * sinX + z1 * cosX;
         x = x1; y = y2; z = z2;
 
-        // speaking: expand radius with voice pulse
+        // radius modulation per state
         let r = p.baseR;
         if (s === "speaking") {
-          const burst = Math.abs(Math.sin(ph * 4.5 + i * 0.27)) * voicePulse;
-          r += burst * 30;
+          r += Math.abs(Math.sin(ph * 4.5 + i * 0.27)) * vp * 22;
         } else if (s === "listening") {
-          r += 5 * Math.sin(ph * 1.8 + i * 0.3);
+          r += 4 * Math.sin(ph * 1.8 + i * 0.3);
         } else if (s === "thinking") {
-          // orbit: pull toward equatorial plane
-          r += 8 * Math.sin(ph * 2 + i * 0.5) * (1 - Math.abs(z));
+          r += 6 * Math.sin(ph * 2 + i * 0.5) * (1 - Math.abs(z));
         }
 
-        // project (simple perspective)
-        const fov = 320;
-        const depth = fov / (fov + z * r * 0.6);
+        // perspective projection
+        const fov   = 340;
+        const depth = fov / (fov + z * r * 0.55);
         const sx = CX + x * r * depth;
         const sy = CY + y * r * depth;
 
-        // brightness by depth
-        const depthBright = 0.4 + 0.6 * ((z + 1) / 2);
+        // depth-based brightness (front = bright, back = dim)
+        const depthB = 0.35 + 0.65 * ((z + 1) / 2);
 
         // twinkle
-        twinkles[i] += p.twinkleSpeed;
-        const tw = 0.55 + 0.45 * Math.sin(twinkles[i]);
+        tw[i] += p.twinkleSpeed;
+        const twv = 0.5 + 0.5 * Math.sin(tw[i]);
 
         // state brightness
-        const stBright = s === "speaking" ? 0.85 + voicePulse * 0.15
-          : s === "listening" ? 0.75 + 0.15 * Math.sin(ph + i * 0.2)
-          : s === "thinking"  ? 0.65 + 0.15 * Math.sin(ph * 1.5 + i * 0.3)
-          : 0.5 + 0.1 * Math.sin(ph * 0.5 + i * 0.4);
+        const stB =
+          s === "speaking"  ? 0.80 + vp * 0.20 :
+          s === "listening" ? 0.75 + 0.15 * Math.sin(ph + i * 0.2) :
+          s === "thinking"  ? 0.65 + 0.15 * Math.sin(ph * 1.5 + i * 0.3) :
+                              0.60 + 0.15 * Math.sin(ph * 0.5 + i * 0.4);
 
-        const alpha = tw * depthBright * stBright;
-        const starSize = p.size * depth * depthBright * (s === "speaking" ? 1 + voicePulse * 0.6 : 1);
+        const alpha    = Math.min(1, twv * depthB * stB);
+        const dotSize  = Math.max(0.3, p.size * depth * (s === "speaking" ? 1 + vp * 0.4 : 1));
 
-        // draw star dot (with tiny cross flare for bright ones)
+        // pure white dot — matches reference exactly
         ctx!.beginPath();
-        ctx!.arc(sx, sy, Math.max(0.3, starSize), 0, Math.PI * 2);
-        ctx!.fillStyle = `rgba(255,255,255,${Math.min(1, alpha)})`;
+        ctx!.arc(sx, sy, dotSize, 0, Math.PI * 2);
+        ctx!.fillStyle = `rgba(255,255,255,${alpha})`;
         ctx!.fill();
-
-        // cross flare on brightest stars
-        if (starSize > 1.8 && alpha > 0.7) {
-          const fl = starSize * 2.5;
-          ctx!.strokeStyle = `rgba(255,255,255,${alpha * 0.35})`;
-          ctx!.lineWidth = 0.5;
-          ctx!.beginPath();
-          ctx!.moveTo(sx - fl, sy); ctx!.lineTo(sx + fl, sy);
-          ctx!.moveTo(sx, sy - fl); ctx!.lineTo(sx, sy + fl);
-          ctx!.stroke();
-        }
       }
 
-      // ── thinking: rotating arc rings ─────────────────────────────
+      // thinking: two clean dashed arcs
       if (s === "thinking") {
         ctx!.save();
         ctx!.translate(CX, CY);
-        for (let ring = 0; ring < 2; ring++) {
-          ctx!.rotate(ring === 0 ? ph * 1.1 : -ph * 0.7);
+        [[1.1, 118, 0.85], [-0.75, 152, 0.6]].forEach(([speed, rad, arc], idx) => {
+          ctx!.rotate(speed * ph);
           ctx!.beginPath();
-          ctx!.arc(0, 0, 110 + ring * 36, 0, Math.PI * (0.9 + ring * 0.4));
-          ctx!.strokeStyle = `rgba(255,255,255,${0.22 - ring * 0.06})`;
-          ctx!.lineWidth = 1.5;
-          ctx!.setLineDash([6, 14]);
+          ctx!.arc(0, 0, rad, 0, Math.PI * arc);
+          ctx!.strokeStyle = `rgba(200,220,255,${0.28 - idx * 0.08})`;
+          ctx!.lineWidth   = 1.4;
+          ctx!.setLineDash([7, 13]);
           ctx!.stroke();
           ctx!.setLineDash([]);
-          ctx!.rotate(ring === 0 ? -(ph * 1.1) : ph * 0.7);
-        }
+          ctx!.rotate(-(speed * ph));
+        });
         ctx!.restore();
       }
 
-      // ── listening: radial pulse ring ─────────────────────────────
+      // listening: single clean pulse ring
       if (s === "listening") {
-        const ringR = 160 + 16 * Math.sin(ph * 2);
+        const rr = 158 + 12 * Math.sin(ph * 2);
         ctx!.beginPath();
-        ctx!.arc(CX, CY, ringR, 0, Math.PI * 2);
-        ctx!.strokeStyle = `rgba(255,255,255,${0.12 + 0.1 * Math.sin(ph * 2)})`;
-        ctx!.lineWidth = 1;
+        ctx!.arc(CX, CY, rr, 0, Math.PI * 2);
+        ctx!.strokeStyle = `rgba(200,230,255,${0.18 + 0.10 * Math.sin(ph * 2)})`;
+        ctx!.lineWidth   = 1;
         ctx!.stroke();
       }
 
@@ -201,14 +191,14 @@ export default function Orb({ state, onClick }: OrbProps) {
   return (
     <canvas
       ref={canvasRef}
-      width={800}
-      height={800}
+      width={700}
+      height={700}
       onClick={onClick}
       style={{
-        cursor: "pointer",
+        cursor:  "pointer",
         display: "block",
-        width:  "min(800px, 95vw)",
-        height: "min(800px, 95vh)",
+        width:   "min(700px, 90vw)",
+        height:  "min(700px, 90vh)",
       }}
     />
   );

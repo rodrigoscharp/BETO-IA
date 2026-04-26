@@ -3,329 +3,396 @@
 import { useState, useRef, useEffect } from "react";
 import Orb, { OrbState } from "@/components/Orb";
 
-// ── Speech Recognition types ──────────────────────────────────────────────
-interface ISpeechRecognitionEvent extends Event {
+/* ── Speech Recognition shim ─────────────────────────────────────────────── */
+interface SREvent extends Event {
   resultIndex: number;
   results: SpeechRecognitionResultList;
 }
-interface ISpeechRecognition extends EventTarget {
-  lang: string;
-  interimResults: boolean;
-  continuous: boolean;
-  maxAlternatives: number;
-  start(): void;
-  stop(): void;
-  abort(): void;
-  onstart:  ((ev: Event) => void) | null;
-  onresult: ((ev: ISpeechRecognitionEvent) => void) | null;
-  onerror:  ((ev: Event) => void) | null;
-  onend:    ((ev: Event) => void) | null;
+interface SR extends EventTarget {
+  lang: string; interimResults: boolean;
+  continuous: boolean; maxAlternatives: number;
+  start(): void; stop(): void; abort(): void;
+  onstart:  ((e: Event) => void) | null;
+  onresult: ((e: SREvent) => void) | null;
+  onerror:  ((e: Event) => void) | null;
+  onend:    ((e: Event) => void) | null;
 }
-interface ISpeechRecognitionCtor { new(): ISpeechRecognition; }
+interface SRCtor { new(): SR; }
 declare global {
-  interface Window {
-    SpeechRecognition: ISpeechRecognitionCtor;
-    webkitSpeechRecognition: ISpeechRecognitionCtor;
-  }
+  interface Window { SpeechRecognition: SRCtor; webkitSpeechRecognition: SRCtor; }
 }
 
-type Mode = "init" | "wake" | "listening" | "thinking" | "speaking";
-interface Message { role: "user" | "assistant"; content: string; }
+type Mode = "idle" | "wake" | "listening" | "thinking" | "speaking";
+interface Msg { role: "user" | "assistant"; content: string; }
+interface SpotifyAction { action: string; query?: string; level?: number; }
 
-const WAKE_WORDS = ["jarvis", "olá jarvis", "ola jarvis", "hey jarvis", "ei jarvis"];
+const WAKE = ["jarvis", "olá jarvis", "ola jarvis", "hey jarvis", "ei jarvis"];
+const SPOTIFY_TAG_RE = /^\[SPOTIFY:(\{[\s\S]*?\})\]\s*/;
 
-function getSpeechAPI(): ISpeechRecognitionCtor | null {
+function getSR(): SRCtor | null {
   if (typeof window === "undefined") return null;
-  return window.SpeechRecognition || window.webkitSpeechRecognition || null;
+  return window.SpeechRecognition ?? window.webkitSpeechRecognition ?? null;
 }
 
-// Pick the best available voice for Jarvis — British male preferred,
-// falls back gracefully to whatever the browser has.
 function pickVoice(): SpeechSynthesisVoice | null {
-  const voices = window.speechSynthesis.getVoices();
-  const prefer = [
-    // Chrome on any OS
-    (v: SpeechSynthesisVoice) => v.name === "Google UK English Male",
-    (v: SpeechSynthesisVoice) => v.name === "Google UK English Female",
-    // macOS built-in British
-    (v: SpeechSynthesisVoice) => v.name === "Daniel",
-    (v: SpeechSynthesisVoice) => v.name === "Malcolm",
-    (v: SpeechSynthesisVoice) => v.name === "Oliver",
-    // Windows
-    (v: SpeechSynthesisVoice) => v.name.includes("Microsoft George"),
-    (v: SpeechSynthesisVoice) => v.name.includes("Microsoft David"),
-    // Any British/UK voice
-    (v: SpeechSynthesisVoice) => v.lang === "en-GB",
-    // Any English voice as last resort
-    (v: SpeechSynthesisVoice) => v.lang.startsWith("en"),
-  ];
-  for (const fn of prefer) {
-    const match = voices.find(fn);
-    if (match) return match;
-  }
-  return null;
+  const all = window.speechSynthesis.getVoices();
+  const try_ = (fn: (v: SpeechSynthesisVoice) => boolean) => all.find(fn) ?? null;
+  return (
+    try_(v => /francisca/i.test(v.name) && v.lang.startsWith("pt"))        ||
+    try_(v => /vitoria online|victoria online/i.test(v.name))               ||
+    try_(v => /leila|camila|giovanna/i.test(v.name) && v.lang.startsWith("pt")) ||
+    try_(v => v.name === "Google português do Brasil")                      ||
+    try_(v => /luciana/i.test(v.name) && v.lang.startsWith("pt"))          ||
+    try_(v => v.lang === "pt-BR" && !v.localService)                       ||
+    try_(v => v.lang === "pt-BR")                                           ||
+    try_(v => v.lang.startsWith("pt"))                                      ||
+    null
+  );
 }
 
+function parseSpotify(reply: string): { action: SpotifyAction | null; text: string } {
+  const m = reply.match(SPOTIFY_TAG_RE);
+  if (!m) return { action: null, text: reply };
+  try {
+    return { action: JSON.parse(m[1]) as SpotifyAction, text: reply.slice(m[0].length).trim() };
+  } catch {
+    return { action: null, text: reply };
+  }
+}
+
+/* ── Component ───────────────────────────────────────────────────────────── */
 export default function JarvisPage() {
   const [orbState, setOrbState] = useState<OrbState>("wake");
+  const [caption,  setCaption]  = useState("");
 
-  const modeRef       = useRef<Mode>("init");
-  const messagesRef   = useRef<Message[]>([]);
-  const wakeRecRef    = useRef<ISpeechRecognition | null>(null);
-  const activeRecRef  = useRef<ISpeechRecognition | null>(null);
-  const restartRef    = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const ttsReadyRef   = useRef(false); // true after first user gesture
-  const micReadyRef   = useRef(false);
+  const mode      = useRef<Mode>("idle");
+  const history   = useRef<Msg[]>([]);
+  const wakeRec   = useRef<SR | null>(null);
+  const activeRec = useRef<SR | null>(null);
+  const timer     = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const deviceId  = useRef<string | null>(null); // Spotify Web Playback device ID
+  const started   = useRef(false);
 
+  /* ── Spotify auth + Web Playback SDK init on mount ───────────────────── */
+  useEffect(() => {
+    const p = new URLSearchParams(window.location.search);
+    if (p.get("spotify") === "ok") {
+      window.history.replaceState({}, "", "/");
+      initSpotifySDK();
+      return;
+    }
+    fetch("/api/spotify/status")
+      .then(r => r.json())
+      .then(d => {
+        if (d.connected) initSpotifySDK();
+        else window.location.href = "/api/spotify/login";
+      })
+      .catch(() => {});
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  /* ── Spotify Web Playback SDK ────────────────────────────────────────── */
+  function initSpotifySDK() {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    if ((window as any).Spotify) { createSpotifyPlayer(); return; }
+
+    const s = document.createElement("script");
+    s.src   = "https://sdk.scdn.co/spotify-player.js";
+    s.async = true;
+    document.head.appendChild(s);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (window as any).onSpotifyWebPlaybackSDKReady = createSpotifyPlayer;
+  }
+
+  function createSpotifyPlayer() {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const SDK = (window as any).Spotify;
+    if (!SDK) return;
+
+    const player = new SDK.Player({
+      name: "Jarvis",
+      getOAuthToken: (cb: (t: string) => void) => {
+        fetch("/api/spotify/token")
+          .then(r => r.json())
+          .then(d => { if (d.token) cb(d.token); })
+          .catch(() => {});
+      },
+      volume: 0.8,
+    });
+
+    player.addListener("ready",     ({ device_id }: { device_id: string }) => {
+      deviceId.current = device_id;
+    });
+    player.addListener("not_ready", () => { deviceId.current = null; });
+    player.addListener("account_error", () => {
+      console.warn("[Jarvis] Spotify Premium necessário para o Web Playback SDK.");
+    });
+
+    player.connect();
+  }
+
+  /* Wait up to 8 s for Spotify device to be ready */
+  async function waitForDevice(): Promise<string | null> {
+    if (deviceId.current) return deviceId.current;
+    for (let i = 0; i < 40; i++) {
+      await new Promise(r => setTimeout(r, 200));
+      if (deviceId.current) return deviceId.current;
+    }
+    return null;
+  }
+
+  /* ── helpers ──────────────────────────────────────────────────────────── */
   function setMode(m: Mode) {
-    modeRef.current = m;
-    const visual: OrbState =
+    mode.current = m;
+    setOrbState(
       m === "speaking"  ? "speaking"  :
       m === "thinking"  ? "thinking"  :
-      m === "listening" ? "listening" : "wake";
-    setOrbState(visual);
+      m === "listening" ? "listening" : "wake"
+    );
   }
 
   function clearTimer() {
-    if (restartRef.current) { clearTimeout(restartRef.current); restartRef.current = null; }
+    if (timer.current) { clearTimeout(timer.current); timer.current = null; }
   }
 
-  // ── Unlock speechSynthesis — MUST run inside a user gesture ──────────
-  function unlockTTS() {
-    if (ttsReadyRef.current) return;
-    ttsReadyRef.current = true;
-    const synth = window.speechSynthesis;
-    if (!synth) return;
-    synth.getVoices(); // trigger voice load
-    synth.onvoiceschanged = () => synth.getVoices();
-    // Speak a zero-volume utterance to permanently unlock TTS for this page
-    const u = new SpeechSynthesisUtterance(" ");
-    u.volume = 0;
-    synth.speak(u);
-  }
-
-  // ── TTS via speechSynthesis ───────────────────────────────────────────
-  function speak(text: string, onDone: () => void) {
-    const synth = window.speechSynthesis;
-    if (!synth) { onDone(); return; }
-
-    // Cancel anything currently playing, then wait one tick
-    synth.cancel();
-
-    setTimeout(() => {
-      const u = new SpeechSynthesisUtterance(text);
-
-      // Voice: British male preferred (Jarvis-like), any English as fallback
-      const voice = pickVoice();
-      if (voice) {
-        u.voice = voice;
-        u.lang  = voice.lang;
-      } else {
-        u.lang = "en-GB";
-      }
-
-      // Natural-sounding prosody — not too fast, slightly lower pitch
-      u.rate   = 0.88;   // deliberate pace
-      u.pitch  = 0.9;    // slightly lower = more authoritative
-      u.volume = 1;
-
-      u.onstart = () => setMode("speaking");
-      u.onend   = () => { onDone(); };
-      u.onerror = (e) => {
-        console.error("[TTS]", (e as SpeechSynthesisErrorEvent).error);
-        onDone();
-      };
-
-      synth.speak(u);
-    }, 80);
-  }
-
-  function stopSpeaking() {
+  function stopAll() {
+    clearTimer();
+    try { wakeRec.current?.abort();   } catch { /* ok */ }
+    try { activeRec.current?.abort(); } catch { /* ok */ }
+    wakeRec.current = null;
+    activeRec.current = null;
     window.speechSynthesis?.cancel();
   }
 
-  // ── Wake word listener ────────────────────────────────────────────────
-  function startWakeListener() {
+  /* ── TTS ──────────────────────────────────────────────────────────────── */
+  function speak(text: string, onDone: () => void) {
+    const synth = window.speechSynthesis;
+    if (!synth) { onDone(); return; }
+    synth.cancel();
+    setTimeout(() => {
+      const u = new SpeechSynthesisUtterance(text);
+      const v = pickVoice();
+      if (v) { u.voice = v; u.lang = v.lang; }
+      else     { u.lang = "pt-BR"; }
+      u.rate = 0.92; u.pitch = 1.05; u.volume = 1;
+      u.onstart = () => { setMode("speaking"); setCaption(text); };
+      u.onend   = () => { setCaption(""); onDone(); };
+      u.onerror = () => { setCaption(""); onDone(); };
+      synth.speak(u);
+    }, 100);
+  }
+
+  /* ── Spotify command executor ─────────────────────────────────────────── */
+  async function execSpotify(action: SpotifyAction): Promise<string | null> {
+    try {
+      // For play commands, ensure device is ready first
+      let did = deviceId.current;
+      if (action.action === "play" || action.action === "resume") {
+        did = await waitForDevice();
+        if (!did) {
+          return "Spotify Premium é necessário para tocar músicas pelo Jarvis. Conecte uma conta Premium e tente novamente.";
+        }
+      }
+
+      const res = await fetch("/api/spotify/command", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...action, device_id: did }),
+      });
+
+      if (res.status === 401) {
+        return "Spotify não autenticado. Recarregue a página para reconectar.";
+      }
+
+      const d = await res.json();
+
+      if (action.action === "current") {
+        if (!d.playing) return "Nenhuma música tocando no momento.";
+        return `Está tocando ${d.track} de ${d.artist}.`;
+      }
+      if (action.action === "play" && d.track) {
+        return `Tocando ${d.track}${d.artist ? " de " + d.artist : ""}.`;
+      }
+      if (action.action === "play" && d.name) {
+        return `Tocando ${d.name}.`;
+      }
+      if (d.error) return d.error;
+
+      return null;
+    } catch {
+      return "Erro ao conectar com o Spotify.";
+    }
+  }
+
+  /* ── Active listener ──────────────────────────────────────────────────── */
+  function startActive() {
+    const API = getSR();
+    if (!API) return;
+    setMode("listening");
+
+    try { activeRec.current?.abort(); } catch { /* ok */ }
+    const rec = new API();
+    activeRec.current = rec;
+    rec.lang = "pt-BR"; rec.interimResults = false;
+    rec.continuous = false; rec.maxAlternatives = 1;
+
+    rec.onresult = (e) => {
+      const text = e.results[0][0].transcript.trim();
+      if (text.length >= 2) sendToJarvis(text);
+      else { setMode("wake"); startWake(); }
+    };
+    rec.onerror = () => { setMode("wake"); startWake(); };
+    rec.onend   = () => { if (mode.current === "listening") { setMode("wake"); startWake(); } };
+    try { rec.start(); } catch { setMode("wake"); startWake(); }
+  }
+
+  /* ── Wake word listener ───────────────────────────────────────────────── */
+  function startWake() {
     clearTimer();
-    if (modeRef.current !== "wake") return;
-    const API = getSpeechAPI();
+    if (mode.current !== "wake") return;
+    const API = getSR();
     if (!API) return;
 
-    try { wakeRecRef.current?.abort(); } catch { /* ok */ }
-    wakeRecRef.current = null;
+    try { wakeRec.current?.abort(); } catch { /* ok */ }
+    wakeRec.current = null;
 
     const rec = new API();
-    rec.lang            = "pt-BR";
-    rec.interimResults  = true;
-    rec.continuous      = true;
-    rec.maxAlternatives = 1;
-    wakeRecRef.current  = rec;
+    wakeRec.current = rec;
+    rec.lang = "pt-BR"; rec.interimResults = true;
+    rec.continuous = true; rec.maxAlternatives = 1;
 
-    rec.onresult = (ev) => {
-      for (let i = ev.resultIndex; i < ev.results.length; i++) {
-        const t = ev.results[i][0].transcript.toLowerCase().trim();
-        if (WAKE_WORDS.some((w) => t.includes(w))) {
+    rec.onresult = (e) => {
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        const t = e.results[i][0].transcript.toLowerCase().trim();
+        if (WAKE.some(w => t.includes(w))) {
           try { rec.abort(); } catch { /* ok */ }
-          wakeRecRef.current = null;
+          wakeRec.current = null;
           clearTimer();
-          restartRef.current = setTimeout(() => startActiveListener(), 120);
+          timer.current = setTimeout(startActive, 150);
           return;
         }
       }
     };
-
-    rec.onerror = () => {
-      if (modeRef.current === "wake")
-        restartRef.current = setTimeout(() => startWakeListener(), 600);
-    };
-
-    rec.onend = () => {
-      if (modeRef.current === "wake")
-        restartRef.current = setTimeout(() => startWakeListener(), 300);
-    };
-
-    try { rec.start(); } catch (e) { console.error("[wake] start failed:", e); }
+    rec.onerror = () => { if (mode.current === "wake") timer.current = setTimeout(startWake, 800); };
+    rec.onend   = () => { if (mode.current === "wake") timer.current = setTimeout(startWake, 400); };
+    try { rec.start(); } catch { /* mic not ready */ }
   }
 
-  // ── Active (command) listener ─────────────────────────────────────────
-  function startActiveListener() {
-    if (modeRef.current === "thinking" || modeRef.current === "speaking") return;
-    const API = getSpeechAPI();
-    if (!API) return;
-
-    setMode("listening");
-    const rec = new API();
-    rec.lang            = "pt-BR";
-    rec.interimResults  = false;
-    rec.continuous      = false;
-    rec.maxAlternatives = 1;
-    activeRecRef.current = rec;
-
-    rec.onresult = (ev) => {
-      const transcript = ev.results[0][0].transcript.trim();
-      if (transcript) {
-        sendToJarvis(transcript);
-      } else {
-        setMode("wake");
-        startWakeListener();
-      }
-    };
-
-    rec.onerror = () => { setMode("wake"); startWakeListener(); };
-
-    rec.onend = () => {
-      if (modeRef.current === "listening") { setMode("wake"); startWakeListener(); }
-    };
-
-    try { rec.start(); }
-    catch (e) { console.error("[active] start failed:", e); setMode("wake"); startWakeListener(); }
-  }
-
-  // ── Send to Groq ──────────────────────────────────────────────────────
+  /* ── Groq + Spotify ───────────────────────────────────────────────────── */
   async function sendToJarvis(text: string) {
     setMode("thinking");
-
-    const history: Message[] = [
-      ...messagesRef.current,
-      { role: "user", content: text },
-    ];
-    messagesRef.current = history;
+    const msgs: Msg[] = [...history.current, { role: "user", content: text }];
+    history.current = msgs;
 
     try {
-      const res = await fetch("/api/chat", {
+      const res  = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          messages: history.slice(-20).map((m) => ({
-            role: m.role,
-            content: m.content,
-          })),
-        }),
+        body: JSON.stringify({ messages: msgs.slice(-20) }),
       });
-
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
 
-      const reply = data.reply as string;
-      messagesRef.current = [...history, { role: "assistant", content: reply }];
+      const rawReply = data.reply as string;
+      const { action, text: spokenText } = parseSpotify(rawReply);
+      history.current = [...msgs, { role: "assistant", content: rawReply }];
 
-      speak(reply, () => { setMode("wake"); startWakeListener(); });
-    } catch (err) {
-      console.error("[jarvis]", err);
-      speak("Desculpe, houve um problema na comunicação.", () => {
-        setMode("wake");
-        startWakeListener();
-      });
+      if (action) {
+        const override = await execSpotify(action);
+        speak(override ?? spokenText, () => { setMode("wake"); startWake(); });
+      } else {
+        speak(spokenText, () => { setMode("wake"); startWake(); });
+      }
+    } catch {
+      speak("Desculpe, houve um erro na comunicação.", () => { setMode("wake"); startWake(); });
     }
   }
 
-  // ── Orb click ─────────────────────────────────────────────────────────
-  function handleOrbClick() {
-    // ALWAYS unlock TTS on any click — Chrome requires a user gesture.
-    unlockTTS();
-
-    if (!micReadyRef.current) {
-      micReadyRef.current = true;
+  /* ── Click handler ────────────────────────────────────────────────────── */
+  function handleClick() {
+    if (!started.current) {
+      started.current = true;
+      const synth = window.speechSynthesis;
+      if (synth) {
+        synth.getVoices();
+        synth.onvoiceschanged = () => synth.getVoices();
+        const u = new SpeechSynthesisUtterance(" ");
+        u.volume = 0;
+        synth.speak(u);
+      }
       setMode("wake");
-      startWakeListener();
+      startWake();
       return;
     }
 
-    const m = modeRef.current;
-
-    if (m === "speaking") {
-      stopSpeaking();
-      setMode("wake");
-      startWakeListener();
-      return;
-    }
+    const m = mode.current;
     if (m === "thinking") return;
+    if (m === "speaking") { window.speechSynthesis?.cancel(); setMode("wake"); startWake(); return; }
     if (m === "listening") {
-      try { activeRecRef.current?.abort(); } catch { /* ok */ }
-      setMode("wake");
-      startWakeListener();
-      return;
+      try { activeRec.current?.abort(); } catch { /* ok */ }
+      setMode("wake"); startWake(); return;
     }
-
-    // wake → activate directly without wake word
+    try { wakeRec.current?.abort(); } catch { /* ok */ }
+    wakeRec.current = null;
     clearTimer();
-    try { wakeRecRef.current?.abort(); } catch { /* ok */ }
-    wakeRecRef.current = null;
-    restartRef.current = setTimeout(() => startActiveListener(), 120);
+    timer.current = setTimeout(startActive, 150);
   }
 
-  // ── Mount ─────────────────────────────────────────────────────────────
+  /* ── Keepalive + cleanup ──────────────────────────────────────────────── */
   useEffect(() => {
-    const t = setTimeout(() => {
-      if (!micReadyRef.current) {
-        micReadyRef.current = true;
-        setMode("wake");
-        startWakeListener();
-      }
-    }, 500);
-
-    // Chrome TTS keepalive — prevents synthesis from silently dying
-    const keepalive = setInterval(() => {
-      if (window.speechSynthesis?.speaking) {
-        window.speechSynthesis.pause();
-        window.speechSynthesis.resume();
-      }
+    const ka = setInterval(() => {
+      const s = window.speechSynthesis;
+      if (s?.speaking) { s.pause(); s.resume(); }
     }, 10_000);
-
-    return () => {
-      clearTimeout(t);
-      clearTimer();
-      clearInterval(keepalive);
-      try { wakeRecRef.current?.abort(); } catch { /* ok */ }
-      try { activeRecRef.current?.abort(); } catch { /* ok */ }
-      stopSpeaking();
-    };
+    return () => { clearInterval(ka); stopAll(); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   return (
-    <main className="fixed inset-0 flex items-center justify-center bg-black">
-      <Orb state={orbState} onClick={handleOrbClick} />
+    <main style={{
+      position: "fixed", inset: 0,
+      display: "flex", alignItems: "center", justifyContent: "center",
+      background: "#07101f",
+    }}>
+      <Orb state={orbState} onClick={handleClick} />
+
+      <div style={{
+        position: "fixed", top: 18, left: 22,
+        color: "rgba(255,255,255,0.18)",
+        fontSize: 11, fontFamily: "monospace", letterSpacing: "0.15em",
+        textTransform: "uppercase", pointerEvents: "none", userSelect: "none",
+      }}>
+        JARVIS · ONLINE
+      </div>
+
+      {caption && (
+        <div style={{
+          position: "fixed", bottom: 52, left: "50%",
+          transform: "translateX(-50%)",
+          maxWidth: "min(660px, 86vw)",
+          textAlign: "center",
+          padding: "10px 24px", borderRadius: 6,
+          background: "rgba(0,0,0,0.5)",
+          backdropFilter: "blur(8px)",
+          color: "#fff",
+          fontSize: "clamp(15px, 2vw, 19px)",
+          fontFamily: "'Segoe UI', system-ui, sans-serif",
+          fontWeight: 400, lineHeight: 1.55, letterSpacing: "0.01em",
+          textShadow: "0 1px 8px rgba(0,0,0,0.9)",
+          border: "1px solid rgba(255,255,255,0.07)",
+          animation: "fadeUp 0.2s ease",
+          pointerEvents: "none",
+        }}>
+          {caption}
+        </div>
+      )}
+
+      <style>{`
+        @keyframes fadeUp {
+          from { opacity: 0; transform: translateX(-50%) translateY(8px); }
+          to   { opacity: 1; transform: translateX(-50%) translateY(0); }
+        }
+      `}</style>
     </main>
   );
 }
