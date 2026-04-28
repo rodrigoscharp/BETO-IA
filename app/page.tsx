@@ -24,10 +24,12 @@ declare global {
 
 type Mode = "idle" | "wake" | "listening" | "thinking" | "speaking";
 interface Msg { role: "user" | "assistant"; content: string; }
-interface SpotifyAction { action: string; query?: string; level?: number; }
+interface SpotifyAction  { action: string; query?: string; level?: number; }
+interface CalendarAction { action: string; title?: string; date?: string; time?: string; duration?: number; query?: string; }
 
 const WAKE = ["jarvis", "olá jarvis", "ola jarvis", "hey jarvis", "ei jarvis"];
-const SPOTIFY_TAG_RE = /^\[SPOTIFY:(\{[\s\S]*?\})\]\s*/;
+const SPOTIFY_TAG_RE  = /^\[SPOTIFY:(\{[\s\S]*?\})\]\s*/;
+const CALENDAR_TAG_RE = /^\[CALENDAR:(\{[\s\S]*?\})\]\s*/;
 
 function getSR(): SRCtor | null {
   if (typeof window === "undefined") return null;
@@ -37,12 +39,15 @@ function getSR(): SRCtor | null {
 function pickVoice(): SpeechSynthesisVoice | null {
   const all = window.speechSynthesis.getVoices();
   const try_ = (fn: (v: SpeechSynthesisVoice) => boolean) => all.find(fn) ?? null;
+  // Prefer known masculine pt-BR / pt voices; fall back to any pt voice
   return (
-    try_(v => /francisca/i.test(v.name) && v.lang.startsWith("pt"))        ||
-    try_(v => /vitoria online|victoria online/i.test(v.name))               ||
-    try_(v => /leila|camila|giovanna/i.test(v.name) && v.lang.startsWith("pt")) ||
-    try_(v => v.name === "Google português do Brasil")                      ||
-    try_(v => /luciana/i.test(v.name) && v.lang.startsWith("pt"))          ||
+    try_(v => /daniel/i.test(v.name)  && v.lang.startsWith("pt"))          ||
+    try_(v => /ricardo/i.test(v.name) && v.lang.startsWith("pt"))          ||
+    try_(v => /antonio|antônio/i.test(v.name) && v.lang.startsWith("pt"))  ||
+    try_(v => /eddy/i.test(v.name)    && v.lang.startsWith("pt"))          ||
+    try_(v => /reed/i.test(v.name)    && v.lang.startsWith("pt"))          ||
+    try_(v => /thomas|tomás/i.test(v.name) && v.lang.startsWith("pt"))     ||
+    try_(v => /luca/i.test(v.name)    && v.lang.startsWith("pt"))          ||
     try_(v => v.lang === "pt-BR" && !v.localService)                       ||
     try_(v => v.lang === "pt-BR")                                           ||
     try_(v => v.lang.startsWith("pt"))                                      ||
@@ -55,6 +60,16 @@ function parseSpotify(reply: string): { action: SpotifyAction | null; text: stri
   if (!m) return { action: null, text: reply };
   try {
     return { action: JSON.parse(m[1]) as SpotifyAction, text: reply.slice(m[0].length).trim() };
+  } catch {
+    return { action: null, text: reply };
+  }
+}
+
+function parseCalendar(reply: string): { action: CalendarAction | null; text: string } {
+  const m = reply.match(CALENDAR_TAG_RE);
+  if (!m) return { action: null, text: reply };
+  try {
+    return { action: JSON.parse(m[1]) as CalendarAction, text: reply.slice(m[0].length).trim() };
   } catch {
     return { action: null, text: reply };
   }
@@ -73,14 +88,15 @@ export default function JarvisPage() {
   const deviceId  = useRef<string | null>(null); // Spotify Web Playback device ID
   const started   = useRef(false);
 
-  /* ── Spotify auth + Web Playback SDK init on mount ───────────────────── */
+  /* ── Spotify + Google Calendar auth on mount ─────────────────────────── */
   useEffect(() => {
     const p = new URLSearchParams(window.location.search);
-    if (p.get("spotify") === "ok") {
-      window.history.replaceState({}, "", "/");
-      initSpotifySDK();
-      return;
-    }
+
+    // Handle OAuth callbacks
+    if (p.get("spotify") === "ok")  { window.history.replaceState({}, "", "/"); initSpotifySDK(); return; }
+    if (p.get("calendar") === "ok") { window.history.replaceState({}, "", "/"); }
+
+    // Init Spotify
     fetch("/api/spotify/status")
       .then(r => r.json())
       .then(d => {
@@ -174,7 +190,7 @@ export default function JarvisPage() {
       const v = pickVoice();
       if (v) { u.voice = v; u.lang = v.lang; }
       else     { u.lang = "pt-BR"; }
-      u.rate = 0.92; u.pitch = 1.05; u.volume = 1;
+      u.rate = 0.93; u.pitch = 0.78; u.volume = 1;
       u.onstart = () => { setMode("speaking"); setCaption(text); };
       u.onend   = () => { setCaption(""); onDone(); };
       u.onerror = () => { setCaption(""); onDone(); };
@@ -182,17 +198,19 @@ export default function JarvisPage() {
     }, 100);
   }
 
+  /* ── Open a spotify: URI in the desktop app via hidden iframe ────────── */
+  function openSpotifyUri(uri: string) {
+    const iframe = document.createElement("iframe");
+    iframe.style.cssText = "position:fixed;width:0;height:0;border:0;opacity:0;pointer-events:none;";
+    iframe.src = uri;
+    document.body.appendChild(iframe);
+    setTimeout(() => { try { document.body.removeChild(iframe); } catch { /* ok */ } }, 3000);
+  }
+
   /* ── Spotify command executor ─────────────────────────────────────────── */
   async function execSpotify(action: SpotifyAction): Promise<string | null> {
     try {
-      // For play commands, ensure device is ready first
-      let did = deviceId.current;
-      if (action.action === "play" || action.action === "resume") {
-        did = await waitForDevice();
-        if (!did) {
-          return "Spotify Premium é necessário para tocar músicas pelo Jarvis. Conecte uma conta Premium e tente novamente.";
-        }
-      }
+      const did = deviceId.current;
 
       const res = await fetch("/api/spotify/command", {
         method: "POST",
@@ -210,6 +228,14 @@ export default function JarvisPage() {
         if (!d.playing) return "Nenhuma música tocando no momento.";
         return `Está tocando ${d.track} de ${d.artist}.`;
       }
+
+      // Open Spotify URI directly in the app (works for free + premium accounts)
+      if (d.spotifyUri) {
+        openSpotifyUri(d.spotifyUri);
+        if (d.track) return `Tocando ${d.track}${d.artist ? " de " + d.artist : ""} no Spotify.`;
+        if (d.name)  return `Abrindo ${d.name} no Spotify.`;
+      }
+
       if (action.action === "play" && d.track) {
         return `Tocando ${d.track}${d.artist ? " de " + d.artist : ""}.`;
       }
@@ -221,6 +247,53 @@ export default function JarvisPage() {
       return null;
     } catch {
       return "Erro ao conectar com o Spotify.";
+    }
+  }
+
+  /* ── Calendar command executor ───────────────────────────────────────── */
+  async function execCalendar(action: CalendarAction): Promise<string> {
+    try {
+      const res = await fetch("/api/calendar/command", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(action),
+      });
+
+      if (res.status === 401) {
+        window.location.href = "/api/calendar/login";
+        return "Redirecionando para autorizar o Google Calendar.";
+      }
+
+      const d = await res.json();
+
+      if (action.action === "create") {
+        if (d.error) return d.error;
+        if (d.ok) {
+          // d.start is already a local datetime string like "2026-04-27T15:00:00"
+          const dt = new Date(d.start);
+          const dateStr = dt.toLocaleDateString("pt-BR", { weekday: "long", day: "numeric", month: "long" });
+          const timeStr = dt.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
+          return `Evento "${d.title}" criado para ${dateStr} às ${timeStr}.`;
+        }
+      }
+
+      if (action.action === "list") {
+        if (d.error) return d.error;
+        if (!d.events?.length) return "Você não tem eventos próximos na agenda.";
+        const list = d.events.map((e: { title: string; start: string }) => {
+          // strip timezone offset so browser doesn't convert to UTC
+          const raw = e.start.replace(/([+-]\d{2}:\d{2}|Z)$/, "");
+          const dt = new Date(raw);
+          const dateStr = dt.toLocaleDateString("pt-BR", { weekday: "long", day: "numeric", month: "long" });
+          const timeStr = dt.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
+          return `${e.title} — ${dateStr} às ${timeStr}`;
+        }).join(". ");
+        return `Seus próximos eventos: ${list}.`;
+      }
+
+      return d.error ?? "Pronto.";
+    } catch {
+      return "Erro ao conectar com o Google Calendar.";
     }
   }
 
@@ -294,14 +367,20 @@ export default function JarvisPage() {
       if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
 
       const rawReply = data.reply as string;
-      const { action, text: spokenText } = parseSpotify(rawReply);
       history.current = [...msgs, { role: "assistant", content: rawReply }];
 
-      if (action) {
-        const override = await execSpotify(action);
-        speak(override ?? spokenText, () => { setMode("wake"); startWake(); });
+      // Check for Spotify or Calendar tags
+      const spotify  = parseSpotify(rawReply);
+      const calendar = parseCalendar(rawReply);
+
+      if (spotify.action) {
+        const override = await execSpotify(spotify.action);
+        speak(override ?? spotify.text, () => { setMode("wake"); startWake(); });
+      } else if (calendar.action) {
+        const result = await execCalendar(calendar.action);
+        speak(result, () => { setMode("wake"); startWake(); });
       } else {
-        speak(spokenText, () => { setMode("wake"); startWake(); });
+        speak(rawReply, () => { setMode("wake"); startWake(); });
       }
     } catch {
       speak("Desculpe, houve um erro na comunicação.", () => { setMode("wake"); startWake(); });
@@ -352,7 +431,7 @@ export default function JarvisPage() {
     <main style={{
       position: "fixed", inset: 0,
       display: "flex", alignItems: "center", justifyContent: "center",
-      background: "#07101f",
+      background: "#000000",
     }}>
       <Orb state={orbState} onClick={handleClick} />
 

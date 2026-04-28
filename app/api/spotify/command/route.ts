@@ -93,11 +93,7 @@ export async function POST(req: NextRequest) {
             const sd = await res.json();
             const item = sd.playlists?.items?.[0];
             if (!item) { result = { error: "Playlist não encontrada." }; break; }
-            const r = await sp(token, "PUT", `/me/player/play${deviceParam}`,
-              { context_uri: item.uri });
-            const err = await spError(r);
-            if (err) { result = { error: err }; break; }
-            result = { ok: true, name: item.name };
+            result = { ok: true, spotifyUri: item.uri, name: item.name };
 
           } else if (isArtist) {
             const clean = query.replace(/\bartista\s*/i, "").trim();
@@ -106,22 +102,17 @@ export async function POST(req: NextRequest) {
             const sd = await res.json();
             const item = sd.artists?.items?.[0];
             if (!item) { result = { error: "Artista não encontrado." }; break; }
-            const r = await sp(token, "PUT", `/me/player/play${deviceParam}`,
-              { context_uri: item.uri });
-            const err = await spError(r);
-            if (err) { result = { error: err }; break; }
-            result = { ok: true, name: item.name };
+            result = { ok: true, spotifyUri: item.uri, name: item.name };
 
           } else {
             const track = await searchTrack(token, query);
             if (!track) { result = { error: "Música não encontrada." }; break; }
-            const r = await sp(token, "PUT", `/me/player/play${deviceParam}`,
-              { uris: [track.uri] });
-            const err = await spError(r);
-            if (err) { result = { error: err }; break; }
-            result = { ok: true, track: track.name, artist: track.artists?.[0]?.name };
+            // Return the Spotify URI so the client can open it directly in the app
+            // This works for both free and premium accounts
+            result = { ok: true, spotifyUri: track.uri, track: track.name, artist: track.artists?.[0]?.name };
           }
         } else {
+          // Resume playback — try API first (works if there's an active device with Premium)
           const r = await sp(token, "PUT", `/me/player/play${deviceParam}`);
           const err = await spError(r);
           if (err) result = { error: err };
