@@ -178,24 +178,67 @@ export default function JarvisPage() {
     wakeRec.current = null;
     activeRec.current = null;
     window.speechSynthesis?.cancel();
+    if (audioRef.current) {
+      audioRef.current.pause();
+      audioRef.current.src = "";
+      audioRef.current = null;
+    }
   }
 
-  /* ── TTS ──────────────────────────────────────────────────────────────── */
+  /* ── TTS (OpenAI onyx → fallback Web Speech) ─────────────────────────── */
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+
   function speak(text: string, onDone: () => void) {
-    const synth = window.speechSynthesis;
-    if (!synth) { onDone(); return; }
-    synth.cancel();
-    setTimeout(() => {
-      const u = new SpeechSynthesisUtterance(text);
-      const v = pickVoice();
-      if (v) { u.voice = v; u.lang = v.lang; }
-      else     { u.lang = "pt-BR"; }
-      u.rate = 0.93; u.pitch = 0.78; u.volume = 1;
-      u.onstart = () => { setMode("speaking"); setCaption(text); };
-      u.onend   = () => { setCaption(""); onDone(); };
-      u.onerror = () => { setCaption(""); onDone(); };
-      synth.speak(u);
-    }, 100);
+    // Stop any current audio
+    if (audioRef.current) {
+      audioRef.current.pause();
+      audioRef.current.src = "";
+      audioRef.current = null;
+    }
+    window.speechSynthesis?.cancel();
+
+    setMode("speaking");
+    setCaption(text);
+
+    fetch("/api/tts", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text }),
+    })
+      .then(res => {
+        if (!res.ok) throw new Error("TTS API falhou");
+        return res.blob();
+      })
+      .then(blob => {
+        const url = URL.createObjectURL(blob);
+        const audio = new Audio(url);
+        audioRef.current = audio;
+        audio.onended = () => {
+          URL.revokeObjectURL(url);
+          audioRef.current = null;
+          setCaption("");
+          onDone();
+        };
+        audio.onerror = () => {
+          URL.revokeObjectURL(url);
+          audioRef.current = null;
+          setCaption("");
+          onDone();
+        };
+        audio.play().catch(() => { setCaption(""); onDone(); });
+      })
+      .catch(() => {
+        // Fallback: Web Speech API
+        const synth = window.speechSynthesis;
+        if (!synth) { setCaption(""); onDone(); return; }
+        const u = new SpeechSynthesisUtterance(text);
+        const v = pickVoice();
+        if (v) { u.voice = v; u.lang = v.lang; } else { u.lang = "pt-BR"; }
+        u.rate = 0.93; u.pitch = 0.78; u.volume = 1;
+        u.onend   = () => { setCaption(""); onDone(); };
+        u.onerror = () => { setCaption(""); onDone(); };
+        synth.speak(u);
+      });
   }
 
   /* ── Open a spotify: URI in the desktop app via hidden iframe ────────── */
@@ -406,7 +449,12 @@ export default function JarvisPage() {
 
     const m = mode.current;
     if (m === "thinking") return;
-    if (m === "speaking") { window.speechSynthesis?.cancel(); setMode("wake"); startWake(); return; }
+    if (m === "speaking") {
+      window.speechSynthesis?.cancel();
+      if (audioRef.current) { audioRef.current.pause(); audioRef.current.src = ""; audioRef.current = null; }
+      setCaption("");
+      setMode("wake"); startWake(); return;
+    }
     if (m === "listening") {
       try { activeRec.current?.abort(); } catch { /* ok */ }
       setMode("wake"); startWake(); return;
