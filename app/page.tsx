@@ -85,8 +85,9 @@ export default function JarvisPage() {
   const wakeRec   = useRef<SR | null>(null);
   const activeRec = useRef<SR | null>(null);
   const timer     = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const deviceId  = useRef<string | null>(null); // Spotify Web Playback device ID
+  const deviceId  = useRef<string | null>(null);
   const started   = useRef(false);
+  const audioRef  = useRef<HTMLAudioElement | null>(null);
 
   /* ── Spotify + Google Calendar auth on mount ─────────────────────────── */
   useEffect(() => {
@@ -185,9 +186,7 @@ export default function JarvisPage() {
     }
   }
 
-  /* ── TTS (OpenAI onyx → fallback Web Speech) ─────────────────────────── */
-  const audioRef = useRef<HTMLAudioElement | null>(null);
-
+  /* ── TTS: ElevenLabs → fallback Web Speech ───────────────────────────── */
   function speak(text: string, onDone: () => void) {
     // Stop any current audio
     if (audioRef.current) {
