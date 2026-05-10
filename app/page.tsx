@@ -311,12 +311,9 @@ export default function JarvisPage() {
   }
 
   function openSpotifyUri(uri: string) {
-    // Convert spotify:type:id → https://open.spotify.com/type/id
-    const parts = uri.split(":");
-    const webUrl = parts.length === 3
-      ? `https://open.spotify.com/${parts[1]}/${parts[2]}`
-      : `https://open.spotify.com`;
-    window.open(webUrl, "_blank", "noopener");
+    // Navigate to spotify: URI — browser hands it to the OS which opens the app.
+    // The page stays because spotify: is a custom protocol handled externally.
+    window.location.href = uri;
   }
 
   /* ── Executors ────────────────────────────────────────────────────────── */

@@ -107,9 +107,8 @@ export async function POST(req: NextRequest) {
             if (!item) { result = { error: "Playlist não encontrada." }; break; }
 
             if (targetDevice) {
-              const r = await sp(token, "PUT", `/me/player/play?device_id=${targetDevice.id}`,
+              await sp(token, "PUT", `/me/player/play?device_id=${targetDevice.id}`,
                 { context_uri: item.uri });
-              if (r.ok || r.status === 204) { result = { ok: true, name: item.name }; break; }
             }
             result = { ok: true, spotifyUri: item.uri, name: item.name };
 
@@ -122,9 +121,8 @@ export async function POST(req: NextRequest) {
             if (!item) { result = { error: "Artista não encontrado." }; break; }
 
             if (targetDevice) {
-              const r = await sp(token, "PUT", `/me/player/play?device_id=${targetDevice.id}`,
+              await sp(token, "PUT", `/me/player/play?device_id=${targetDevice.id}`,
                 { context_uri: item.uri });
-              if (r.ok || r.status === 204) { result = { ok: true, name: item.name }; break; }
             }
             result = { ok: true, spotifyUri: item.uri, name: item.name };
 
@@ -136,11 +134,12 @@ export async function POST(req: NextRequest) {
               const r = await sp(token, "PUT", `/me/player/play?device_id=${targetDevice.id}`,
                 { uris: [track.uri] });
               if (r.ok || r.status === 204) {
-                result = { ok: true, track: track.name, artist: track.artists?.[0]?.name };
+                // API play worked — still include URI so client can bring app to foreground
+                result = { ok: true, spotifyUri: track.uri, track: track.name, artist: track.artists?.[0]?.name };
                 break;
               }
             }
-            // Fallback: deep link
+            // No device or API failed — client will open the app via deep link
             result = { ok: true, spotifyUri: track.uri, track: track.name, artist: track.artists?.[0]?.name };
           }
         } else {
