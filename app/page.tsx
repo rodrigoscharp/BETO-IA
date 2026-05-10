@@ -463,14 +463,13 @@ export default function JarvisPage() {
   }
 
   /* ── Active listener ──────────────────────────────────────────────────── */
-  function startActive() {
+  function startActive(timeoutMs = 8000) {
     const API = getSR();
     if (!API) return;
     setMode("listening");
     try { activeRec.current?.abort(); } catch { /* ok */ }
     const rec = new API();
     activeRec.current = rec;
-    // continuous=true garante que o browser não encerra antes do usuário terminar de falar
     rec.lang = "pt-BR"; rec.interimResults = false; rec.continuous = true; rec.maxAlternatives = 1;
 
     let captured = false;
@@ -479,7 +478,10 @@ export default function JarvisPage() {
       for (let i = e.resultIndex; i < e.results.length; i++) {
         if (e.results[i].isFinal) {
           const text = e.results[i][0].transcript.trim();
-          if (text.length >= 2 && !captured) {
+          const lower = text.toLowerCase();
+          // Ignore bare wake words — user may say "Jarvis" thinking they need to re-trigger
+          const isOnlyWake = WAKE.some(w => lower === w || lower === w + ".");
+          if (text.length >= 2 && !captured && !isOnlyWake) {
             captured = true;
             try { rec.abort(); } catch { /* ok */ }
             sendToJarvis(text);
@@ -488,13 +490,12 @@ export default function JarvisPage() {
       }
     };
     rec.onerror = () => { if (!captured) { setMode("wake"); startWake(); } };
-    // Timeout de segurança: se em 8s não capturou nada, volta ao wake
     const timeout = setTimeout(() => {
       if (!captured && mode.current === "listening") {
         try { rec.abort(); } catch { /* ok */ }
         setMode("wake"); startWake();
       }
-    }, 8000);
+    }, timeoutMs);
     rec.onend = () => { clearTimeout(timeout); if (!captured && mode.current === "listening") { setMode("wake"); startWake(); } };
     try { rec.start(); } catch { setMode("wake"); startWake(); }
   }
@@ -553,8 +554,8 @@ export default function JarvisPage() {
       const memory   = parseTag<MemoryAction>(rawReply,   MEMORY_TAG_RE);
       const briefing = parseTag<BriefingAction>(rawReply, BRIEFING_TAG_RE);
 
-      // After speaking, wait briefly then listen for follow-up (8s timeout falls back to wake)
-      const done = () => setTimeout(startActive, 400);
+      // After speaking, listen 4s for follow-up, then fall back to wake word mode
+      const done = () => setTimeout(() => startActive(4000), 400);
 
       const say = (t: string) => speak(sanitize(t), done);
 
