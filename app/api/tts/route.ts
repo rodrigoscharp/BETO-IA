@@ -17,7 +17,7 @@ export async function POST(req: NextRequest) {
     }
 
     const res = await fetch(
-      `https://api.elevenlabs.io/v1/text-to-speech/${VOICE_ID}`,
+      `https://api.elevenlabs.io/v1/text-to-speech/${VOICE_ID}/stream`,
       {
         method: "POST",
         headers: {
@@ -27,11 +27,11 @@ export async function POST(req: NextRequest) {
         },
         body: JSON.stringify({
           text,
-          model_id: "eleven_multilingual_v2",
+          model_id: "eleven_turbo_v2_5",
           voice_settings: {
             stability: 0.45,
             similarity_boost: 0.82,
-            style: 0.25,
+            style: 0.20,
             use_speaker_boost: true,
           },
         }),
@@ -43,13 +43,13 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: err }, { status: res.status });
     }
 
-    const audioBuffer = await res.arrayBuffer();
-
-    return new NextResponse(audioBuffer, {
+    // Pipe stream directly to the client — no buffering
+    return new NextResponse(res.body, {
       status: 200,
       headers: {
         "Content-Type": "audio/mpeg",
         "Cache-Control": "no-store",
+        "Transfer-Encoding": "chunked",
       },
     });
   } catch (error: unknown) {

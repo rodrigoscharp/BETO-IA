@@ -122,7 +122,7 @@ export async function POST(req: NextRequest) {
         ...messages,
       ],
       temperature: 0.85,
-      max_tokens: 1024,
+      max_tokens: 300,
     });
 
     const reply = completion.choices[0]?.message?.content ?? "";

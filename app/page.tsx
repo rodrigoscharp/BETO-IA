@@ -221,27 +221,76 @@ export default function JarvisPage() {
     setMode("speaking");
     setCaption(text);
 
+    const fallbackSynth = () => {
+      const synth = window.speechSynthesis;
+      if (!synth) { setCaption(""); onDone(); return; }
+      const u = new SpeechSynthesisUtterance(text);
+      const v = pickVoice();
+      if (v) { u.voice = v; u.lang = v.lang; } else { u.lang = "pt-BR"; }
+      u.rate = 0.93; u.pitch = 0.78; u.volume = 1;
+      u.onend   = () => { setCaption(""); onDone(); };
+      u.onerror = () => { setCaption(""); onDone(); };
+      synth.speak(u);
+    };
+
     fetch("/api/tts", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text }) })
-      .then(res => { if (!res.ok) throw new Error("TTS API falhou"); return res.blob(); })
-      .then(blob => {
-        const url = URL.createObjectURL(blob);
-        const audio = new Audio(url);
-        audioRef.current = audio;
-        audio.onended = () => { URL.revokeObjectURL(url); audioRef.current = null; setCaption(""); onDone(); };
-        audio.onerror = () => { URL.revokeObjectURL(url); audioRef.current = null; setCaption(""); onDone(); };
-        audio.play().catch(() => { setCaption(""); onDone(); });
+      .then(res => {
+        if (!res.ok || !res.body) throw new Error("TTS falhou");
+
+        // Progressive streaming via MediaSource (Chrome/Edge/Firefox)
+        const supportsMS =
+          typeof MediaSource !== "undefined" &&
+          MediaSource.isTypeSupported("audio/mpeg");
+
+        if (supportsMS) {
+          const ms  = new MediaSource();
+          const url = URL.createObjectURL(ms);
+          const audio = new Audio(url);
+          audioRef.current = audio;
+
+          const cleanup = () => { URL.revokeObjectURL(url); audioRef.current = null; setCaption(""); onDone(); };
+          audio.onended = cleanup;
+          audio.onerror = cleanup;
+
+          ms.addEventListener("sourceopen", async () => {
+            let sb: SourceBuffer;
+            try { sb = ms.addSourceBuffer("audio/mpeg"); }
+            catch { cleanup(); return; }
+
+            const reader = res.body!.getReader();
+            let started = false;
+
+            const waitUpdate = () =>
+              new Promise<void>(r => sb.addEventListener("updateend", () => r(), { once: true }));
+
+            try {
+              for (;;) {
+                const { done, value } = await reader.read();
+                if (done) {
+                  if (sb.updating) await waitUpdate();
+                  if (ms.readyState === "open") ms.endOfStream();
+                  return;
+                }
+                if (sb.updating) await waitUpdate();
+                sb.appendBuffer(value);
+                if (!started) { started = true; audio.play().catch(() => {}); }
+              }
+            } catch { cleanup(); }
+          });
+
+        } else {
+          // Fallback: blob (Safari)
+          res.blob().then(blob => {
+            const url = URL.createObjectURL(blob);
+            const audio = new Audio(url);
+            audioRef.current = audio;
+            audio.onended = () => { URL.revokeObjectURL(url); audioRef.current = null; setCaption(""); onDone(); };
+            audio.onerror = () => { URL.revokeObjectURL(url); audioRef.current = null; setCaption(""); onDone(); };
+            audio.play().catch(() => { setCaption(""); onDone(); });
+          }).catch(fallbackSynth);
+        }
       })
-      .catch(() => {
-        const synth = window.speechSynthesis;
-        if (!synth) { setCaption(""); onDone(); return; }
-        const u = new SpeechSynthesisUtterance(text);
-        const v = pickVoice();
-        if (v) { u.voice = v; u.lang = v.lang; } else { u.lang = "pt-BR"; }
-        u.rate = 0.93; u.pitch = 0.78; u.volume = 1;
-        u.onend   = () => { setCaption(""); onDone(); };
-        u.onerror = () => { setCaption(""); onDone(); };
-        synth.speak(u);
-      });
+      .catch(fallbackSynth);
   }
 
   function openSpotifyUri(uri: string) {
