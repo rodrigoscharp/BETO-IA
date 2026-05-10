@@ -50,7 +50,7 @@ export default function Orb({ state, onClick }: OrbProps) {
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
-    const ctx = canvas.getContext("2d", { alpha: true });
+    const ctx = canvas.getContext("2d", { alpha: true })!;
     if (!ctx) return;
 
     const resize = () => {
