@@ -82,18 +82,6 @@ export async function POST(req: NextRequest) {
   try {
     switch (action) {
       case "play": {
-        // Get user's real Spotify devices (phone, desktop app, etc.)
-        const devRes = await sp(token, "GET", "/me/player/devices");
-        type SpDevice = { id: string; name: string; is_active: boolean };
-        let realDevices: SpDevice[] = [];
-        if (devRes.ok) {
-          const dd = await devRes.json();
-          // Exclude the browser SDK "Jarvis" device — we want the user's actual app
-          realDevices = (dd.devices as SpDevice[] ?? []).filter(d => d.name !== "Jarvis");
-        }
-        const targetDevice =
-          realDevices.find(d => d.is_active) ?? realDevices[0] ?? null;
-
         if (query) {
           const isPlaylist = /playlist/i.test(query);
           const isArtist   = /\bartista\b|\bartist\b/i.test(query);
@@ -105,11 +93,6 @@ export async function POST(req: NextRequest) {
             const sd = await res.json();
             const item = sd.playlists?.items?.[0];
             if (!item) { result = { error: "Playlist não encontrada." }; break; }
-
-            if (targetDevice) {
-              await sp(token, "PUT", `/me/player/play?device_id=${targetDevice.id}`,
-                { context_uri: item.uri });
-            }
             result = { ok: true, spotifyUri: item.uri, name: item.name };
 
           } else if (isArtist) {
@@ -119,33 +102,15 @@ export async function POST(req: NextRequest) {
             const sd = await res.json();
             const item = sd.artists?.items?.[0];
             if (!item) { result = { error: "Artista não encontrado." }; break; }
-
-            if (targetDevice) {
-              await sp(token, "PUT", `/me/player/play?device_id=${targetDevice.id}`,
-                { context_uri: item.uri });
-            }
             result = { ok: true, spotifyUri: item.uri, name: item.name };
 
           } else {
             const track = await searchTrack(token, query);
             if (!track) { result = { error: "Música não encontrada." }; break; }
-
-            if (targetDevice) {
-              const r = await sp(token, "PUT", `/me/player/play?device_id=${targetDevice.id}`,
-                { uris: [track.uri] });
-              if (r.ok || r.status === 204) {
-                // API play worked — still include URI so client can bring app to foreground
-                result = { ok: true, spotifyUri: track.uri, track: track.name, artist: track.artists?.[0]?.name };
-                break;
-              }
-            }
-            // No device or API failed — client will open the app via deep link
             result = { ok: true, spotifyUri: track.uri, track: track.name, artist: track.artists?.[0]?.name };
           }
         } else {
-          // Resume on real device or current active player
-          const target = targetDevice ? `?device_id=${targetDevice.id}` : deviceParam;
-          const r = await sp(token, "PUT", `/me/player/play${target}`);
+          const r = await sp(token, "PUT", `/me/player/play${deviceParam}`);
           const err = await spError(r);
           if (err) result = { error: err };
         }
