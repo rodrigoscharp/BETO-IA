@@ -540,16 +540,12 @@ export default function JarvisPage() {
 
   /* ── Render ───────────────────────────────────────────────────────────── */
   return (
-    <main style={{
-      position: "fixed", inset: 0,
-      display: "flex", alignItems: "center", justifyContent: "center",
-      background: "#000000",
-    }}>
+    <main style={{ position: "fixed", inset: 0, background: "#000000" }}>
       <Orb state={orbState} onClick={handleClick} />
 
       {/* Status badge */}
       <div style={{
-        position: "fixed", top: 18, left: 22,
+        position: "fixed", top: 18, left: 22, zIndex: 10,
         color: "rgba(255,255,255,0.18)",
         fontSize: 11, fontFamily: "monospace", letterSpacing: "0.15em",
         textTransform: "uppercase", pointerEvents: "none", userSelect: "none",
@@ -560,7 +556,7 @@ export default function JarvisPage() {
       {/* Timer display — canto superior direito */}
       {timerDisplay && (
         <div style={{
-          position: "fixed", top: 18, right: 22,
+          position: "fixed", top: 18, right: 22, zIndex: 10,
           color: "rgba(255,255,255,0.75)",
           textAlign: "right", pointerEvents: "none", userSelect: "none",
         }}>
@@ -579,7 +575,7 @@ export default function JarvisPage() {
       {/* Caption */}
       {caption && (
         <div style={{
-          position: "fixed", bottom: 52, left: "50%",
+          position: "fixed", bottom: 52, left: "50%", zIndex: 10,
           transform: "translateX(-50%)",
           maxWidth: "min(660px, 86vw)",
           textAlign: "center",
