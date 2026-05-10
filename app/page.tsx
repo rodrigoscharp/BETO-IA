@@ -385,14 +385,32 @@ export default function JarvisPage() {
     try { activeRec.current?.abort(); } catch { /* ok */ }
     const rec = new API();
     activeRec.current = rec;
-    rec.lang = "pt-BR"; rec.interimResults = false; rec.continuous = false; rec.maxAlternatives = 1;
+    // continuous=true garante que o browser não encerra antes do usuário terminar de falar
+    rec.lang = "pt-BR"; rec.interimResults = false; rec.continuous = true; rec.maxAlternatives = 1;
+
+    let captured = false;
+
     rec.onresult = (e) => {
-      const text = e.results[0][0].transcript.trim();
-      if (text.length >= 2) sendToJarvis(text);
-      else { setMode("wake"); startWake(); }
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        if (e.results[i].isFinal) {
+          const text = e.results[i][0].transcript.trim();
+          if (text.length >= 2 && !captured) {
+            captured = true;
+            try { rec.abort(); } catch { /* ok */ }
+            sendToJarvis(text);
+          }
+        }
+      }
     };
-    rec.onerror = () => { setMode("wake"); startWake(); };
-    rec.onend   = () => { if (mode.current === "listening") { setMode("wake"); startWake(); } };
+    rec.onerror = () => { if (!captured) { setMode("wake"); startWake(); } };
+    // Timeout de segurança: se em 8s não capturou nada, volta ao wake
+    const timeout = setTimeout(() => {
+      if (!captured && mode.current === "listening") {
+        try { rec.abort(); } catch { /* ok */ }
+        setMode("wake"); startWake();
+      }
+    }, 8000);
+    rec.onend = () => { clearTimeout(timeout); if (!captured && mode.current === "listening") { setMode("wake"); startWake(); } };
     try { rec.start(); } catch { setMode("wake"); startWake(); }
   }
 

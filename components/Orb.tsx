@@ -3,28 +3,46 @@
 import { useEffect, useRef } from "react";
 
 export type OrbState = "wake" | "listening" | "thinking" | "speaking";
+interface OrbProps { state: OrbState; onClick: () => void; }
 
-interface OrbProps {
-  state: OrbState;
-  onClick: () => void;
+const N = 200;
+
+type P = {
+  x: number; y: number;
+  vx: number; vy: number;
+  size: number;
+  alpha: number;
+  phase: number;
+  phaseSpd: number;
+  orbitR: number;
+  orbitA: number;
+  orbitSpd: number;
+};
+
+function mkParticles(w: number, h: number): P[] {
+  return Array.from({ length: N }, () => ({
+    x: Math.random() * w,
+    y: Math.random() * h,
+    vx: (Math.random() - 0.5) * 0.6,
+    vy: (Math.random() - 0.5) * 0.6,
+    size: 0.7 + Math.random() * 2.2,
+    alpha: 0.12 + Math.random() * 0.55,
+    phase: Math.random() * Math.PI * 2,
+    phaseSpd: 0.007 + Math.random() * 0.022,
+    orbitR: 30 + Math.random() * 145,
+    orbitA: Math.random() * Math.PI * 2,
+    orbitSpd: (Math.random() > 0.5 ? 1 : -1) * (0.005 + Math.random() * 0.020),
+  }));
 }
-
-const SIZE = 700;
-const CX = SIZE / 2;
-const CY = SIZE / 2;
-const R  = 128;
-
-const BLOBS = [
-  { fx: 0.43, fy: 0.57, ax: 0.42, ay: 0.34, ph0: 0.00, r: 40,  g: 145, b: 255, sz: R * 0.90 },
-  { fx: 0.31, fy: 0.72, ax: 0.37, ay: 0.46, ph0: 2.09, r: 0,   g: 215, b: 255, sz: R * 0.72 },
-  { fx: 0.67, fy: 0.28, ax: 0.51, ay: 0.31, ph0: 4.19, r: 130, g: 160, b: 255, sz: R * 0.58 },
-];
 
 export default function Orb({ state, onClick }: OrbProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const frameRef  = useRef(0);
   const phRef     = useRef(0);
+  const tRef      = useRef(0);
   const stateRef  = useRef(state);
+  const ptsRef    = useRef<P[]>([]);
+  const dimRef    = useRef({ w: 0, h: 0 });
 
   useEffect(() => { stateRef.current = state; }, [state]);
 
@@ -34,160 +52,166 @@ export default function Orb({ state, onClick }: OrbProps) {
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
 
+    const resize = () => {
+      const w = window.innerWidth;
+      const h = window.innerHeight;
+      canvas.width  = w;
+      canvas.height = h;
+      dimRef.current = { w, h };
+      if (ptsRef.current.length === 0) ptsRef.current = mkParticles(w, h);
+    };
+
+    resize();
+    window.addEventListener("resize", resize);
+
     function draw() {
       const s = stateRef.current;
+      const { w, h } = dimRef.current;
+      const CX = w / 2, CY = h / 2;
+      const pts = ptsRef.current;
 
       phRef.current +=
-        s === "speaking"  ? 0.075 :
-        s === "thinking"  ? 0.040 :
-        s === "listening" ? 0.026 : 0.008;
+        s === "speaking"  ? 0.070 :
+        s === "thinking"  ? 0.038 :
+        s === "listening" ? 0.024 : 0.008;
       const ph = phRef.current;
 
-      // Composite voice pulse for speaking
       const vp = s === "speaking"
         ? 0.5 * Math.abs(Math.sin(ph * 3.7))
         + 0.3 * Math.abs(Math.sin(ph * 7.1  + 1.2))
         + 0.2 * Math.abs(Math.sin(ph * 13.3 + 2.4))
         : 0;
 
-      const breath = 0.5 + 0.5 * Math.sin(ph * 0.7);
+      // Smooth gather transition
+      const targetT = s !== "wake" ? 1 : 0;
+      tRef.current  += (targetT - tRef.current) * 0.028;
+      const t = tRef.current;
 
       const hue =
         s === "thinking"  ? 265 :
         s === "listening" ? 188 :
         s === "speaking"  ? 205 : 215;
 
-      ctx!.clearRect(0, 0, SIZE, SIZE);
+      ctx!.clearRect(0, 0, w, h);
 
-      // ── Distant ambient glow ─────────────────────────────────────────────
-      {
-        const gr = R * (s === "speaking" ? 3.8 + vp * 0.6 : s === "listening" ? 3.2 : 2.6 + breath * 0.2);
-        const ga = s === "speaking" ? 0.07 + vp * 0.05 : s === "listening" ? 0.06 : 0.040;
-        const g  = ctx!.createRadialGradient(CX, CY, R * 0.4, CX, CY, gr);
-        g.addColorStop(0,    `hsla(${hue},85%,65%,0)`);
-        g.addColorStop(0.35, `hsla(${hue},80%,60%,${ga * 0.5})`);
-        g.addColorStop(0.65, `hsla(${hue},75%,55%,${ga})`);
-        g.addColorStop(1,    `hsla(${hue},70%,50%,0)`);
+      // ── Particles ────────────────────────────────────────────────────────
+      for (const p of pts) {
+        p.phase += p.phaseSpd;
+        const twinkle = 0.45 + 0.55 * Math.sin(p.phase);
+
+        if (t > 0.01) {
+          // Spring toward orbit position
+          p.orbitA += p.orbitSpd * (0.6 + t * 0.8);
+          const tx = CX + Math.cos(p.orbitA) * p.orbitR;
+          const ty = CY + Math.sin(p.orbitA) * p.orbitR;
+          p.vx += (tx - p.x) * 0.065 * t;
+          p.vy += (ty - p.y) * 0.065 * t;
+        }
+
+        // Idle drift: gentle random nudge
+        if (t < 0.98) {
+          p.vx += (Math.random() - 0.5) * 0.045 * (1 - t);
+          p.vy += (Math.random() - 0.5) * 0.045 * (1 - t);
+        }
+
+        p.vx *= 0.91;
+        p.vy *= 0.91;
+        p.x  += p.vx;
+        p.y  += p.vy;
+
+        // Wrap edges when idle
+        if (t < 0.4) {
+          if (p.x < -20) p.x = w + 20;
+          if (p.x > w + 20) p.x = -20;
+          if (p.y < -20) p.y = h + 20;
+          if (p.y > h + 20) p.y = -20;
+        }
+
+        const dist     = Math.hypot(p.x - CX, p.y - CY);
+        const proximity = Math.max(0, 1 - dist / 220);
+        const bright    = 1 + t * proximity * 1.8;
+        const alpha     = Math.min(0.95, p.alpha * twinkle * bright);
+        const radius    = p.size * (1 + t * proximity * 0.7);
+
         ctx!.beginPath();
-        ctx!.arc(CX, CY, gr, 0, Math.PI * 2);
-        ctx!.fillStyle = g;
+        ctx!.arc(p.x, p.y, radius, 0, Math.PI * 2);
+        ctx!.fillStyle = t > 0.08 && proximity > 0.15
+          ? `hsla(${hue},85%,82%,${alpha})`
+          : `rgba(255,255,255,${alpha * (0.4 + t * 0.6)})`;
         ctx!.fill();
       }
 
-      // ── Sphere (clipped) ─────────────────────────────────────────────────
-      ctx!.save();
-      ctx!.beginPath();
-      ctx!.arc(CX, CY, R, 0, Math.PI * 2);
-      ctx!.clip();
-
-      // Dark body
-      {
-        const g = ctx!.createRadialGradient(CX - R * 0.15, CY - R * 0.2, 0, CX, CY, R);
-        g.addColorStop(0,   `hsl(${hue},35%,12%)`);
-        g.addColorStop(0.6, `hsl(${hue},45%,7%)`);
-        g.addColorStop(1,   `hsl(${hue},55%,4%)`);
-        ctx!.fillStyle = g;
-        ctx!.fillRect(CX - R, CY - R, R * 2, R * 2);
-      }
-
-      // Animated plasma blobs
-      const blobSpeed = s === "speaking" ? 2.0 : s === "thinking" ? 1.7 : s === "listening" ? 1.3 : 1.0;
-      const blobAlpha = s === "speaking" ? 0.40 + vp * 0.30 : s === "listening" ? 0.32 : s === "thinking" ? 0.24 : 0.18;
-
-      for (const b of BLOBS) {
-        const bx = CX + Math.sin(ph * b.fx * blobSpeed + b.ph0) * b.ax * R;
-        const by = CY + Math.cos(ph * b.fy * blobSpeed + b.ph0 * 1.37) * b.ay * R;
-        const g  = ctx!.createRadialGradient(bx, by, 0, bx, by, b.sz);
-        g.addColorStop(0,    `rgba(${b.r},${b.g},${b.b},${blobAlpha})`);
-        g.addColorStop(0.45, `rgba(${b.r},${b.g},${b.b},${blobAlpha * 0.35})`);
-        g.addColorStop(1,    `rgba(${b.r},${b.g},${b.b},0)`);
-        ctx!.fillStyle = g;
-        ctx!.fillRect(CX - R, CY - R, R * 2, R * 2);
-      }
-
-      // Inner core highlight
-      {
-        const cA = s === "speaking"
-          ? 0.50 + vp * 0.35
-          : s === "listening" ? 0.32 + breath * 0.10
-          : 0.20 + breath * 0.06;
-        const g = ctx!.createRadialGradient(CX, CY, 0, CX, CY, R * 0.55);
-        g.addColorStop(0,   `hsla(${hue + 20},95%,95%,${cA})`);
-        g.addColorStop(0.5, `hsla(${hue + 10},85%,75%,${cA * 0.25})`);
-        g.addColorStop(1,   `hsla(${hue},80%,60%,0)`);
-        ctx!.fillStyle = g;
-        ctx!.fillRect(CX - R, CY - R, R * 2, R * 2);
-      }
-
-      // Fresnel rim glow
-      {
-        const rA = s === "speaking" ? 0.75 + vp * 0.20 : s === "listening" ? 0.55 : 0.38;
-        const g  = ctx!.createRadialGradient(CX, CY, R * 0.62, CX, CY, R);
-        g.addColorStop(0,    `hsla(${hue + 15},90%,88%,0)`);
-        g.addColorStop(0.65, `hsla(${hue + 10},90%,85%,${rA * 0.12})`);
-        g.addColorStop(0.85, `hsla(${hue + 15},95%,92%,${rA * 0.50})`);
-        g.addColorStop(1,    `hsla(${hue + 20},100%,98%,${rA * 0.88})`);
-        ctx!.fillStyle = g;
-        ctx!.fillRect(CX - R, CY - R, R * 2, R * 2);
-      }
-
-      // Top specular gloss
-      {
-        const g = ctx!.createRadialGradient(CX - R * 0.28, CY - R * 0.35, 0, CX - R * 0.15, CY - R * 0.2, R * 0.55);
-        g.addColorStop(0,   `rgba(255,255,255,0.18)`);
-        g.addColorStop(0.4, `rgba(255,255,255,0.06)`);
-        g.addColorStop(1,   `rgba(255,255,255,0)`);
-        ctx!.fillStyle = g;
-        ctx!.fillRect(CX - R, CY - R, R * 2, R * 2);
-      }
-
-      ctx!.restore();
-
-      // ── Corona ───────────────────────────────────────────────────────────
-      {
-        const cr = R * (s === "speaking"
-          ? 1.55 + vp * 0.25
-          : s === "listening" ? 1.42 + 0.08 * Math.sin(ph * 1.5)
-          : 1.28 + breath * 0.04);
-        const ca = s === "speaking" ? 0.32 + vp * 0.18 : s === "listening" ? 0.22 : s === "thinking" ? 0.18 : 0.12;
-        const g  = ctx!.createRadialGradient(CX, CY, R * 0.88, CX, CY, cr);
-        g.addColorStop(0,   `hsla(${hue},88%,72%,${ca})`);
-        g.addColorStop(0.5, `hsla(${hue},82%,65%,${ca * 0.4})`);
-        g.addColorStop(1,   `hsla(${hue},76%,55%,0)`);
+      // ── Central glow ─────────────────────────────────────────────────────
+      if (t > 0.04) {
+        // Outer ambient
+        const ambR = (s === "speaking" ? 280 + vp * 100 : s === "listening" ? 240 + 20 * Math.sin(ph) : 200) * t;
+        const ambA = t * (s === "speaking" ? 0.09 + vp * 0.07 : 0.055);
+        const ga   = ctx!.createRadialGradient(CX, CY, 0, CX, CY, ambR);
+        ga.addColorStop(0,    `hsla(${hue},85%,65%,0)`);
+        ga.addColorStop(0.35, `hsla(${hue},80%,60%,${ambA * 0.5})`);
+        ga.addColorStop(0.65, `hsla(${hue},75%,55%,${ambA})`);
+        ga.addColorStop(1,    `hsla(${hue},70%,50%,0)`);
         ctx!.beginPath();
-        ctx!.arc(CX, CY, cr, 0, Math.PI * 2);
-        ctx!.fillStyle = g;
+        ctx!.arc(CX, CY, ambR, 0, Math.PI * 2);
+        ctx!.fillStyle = ga;
+        ctx!.fill();
+
+        // Bright core
+        const coreR = (s === "speaking" ? 38 + vp * 28 : 22 + 5 * Math.sin(ph * 0.8)) * t;
+        const coreA = t * (s === "speaking" ? 0.85 + vp * 0.15 : 0.55);
+        const gc    = ctx!.createRadialGradient(CX, CY, 0, CX, CY, coreR * 3);
+        gc.addColorStop(0,    `rgba(255,255,255,${coreA})`);
+        gc.addColorStop(0.2,  `hsla(${hue},90%,90%,${coreA * 0.6})`);
+        gc.addColorStop(0.55, `hsla(${hue},85%,70%,${coreA * 0.15})`);
+        gc.addColorStop(1,    `hsla(${hue},80%,60%,0)`);
+        ctx!.beginPath();
+        ctx!.arc(CX, CY, coreR * 3, 0, Math.PI * 2);
+        ctx!.fillStyle = gc;
         ctx!.fill();
       }
 
-      // ── Listening: expanding rings ───────────────────────────────────────
-      if (s === "listening") {
-        for (let i = 0; i < 3; i++) {
-          const t  = (ph * 0.27 + i / 3) % 1;
-          const rr = R * (1.05 + t * 1.9);
-          const ra = (1 - t) * 0.20 * (0.7 + 0.3 * Math.sin(ph));
+      // ── Speaking: shockwave rings ────────────────────────────────────────
+      if (s === "speaking" && t > 0.4) {
+        for (let i = 0; i < 4; i++) {
+          const wt = (ph * 1.8 + i * 0.25) % 1;
+          const wr = (60 + wt * 300) * t;
+          const wa = (1 - wt) * (0.16 + vp * 0.14) * t;
           ctx!.beginPath();
-          ctx!.arc(CX, CY, rr, 0, Math.PI * 2);
-          ctx!.strokeStyle = `hsla(${hue},90%,78%,${ra})`;
-          ctx!.lineWidth   = 1.2 * (1 - t * 0.5);
+          ctx!.arc(CX, CY, wr, 0, Math.PI * 2);
+          ctx!.strokeStyle = `hsla(${hue},88%,82%,${wa})`;
+          ctx!.lineWidth   = Math.max(0.3, 1.3 * (1 - wt));
+          ctx!.stroke();
+        }
+      }
+
+      // ── Listening: concentric pulses ─────────────────────────────────────
+      if (s === "listening" && t > 0.4) {
+        for (let i = 0; i < 3; i++) {
+          const lt = (ph * 0.26 + i / 3) % 1;
+          const lr = (50 + lt * 200) * t;
+          const la = (1 - lt) * 0.18 * t;
+          ctx!.beginPath();
+          ctx!.arc(CX, CY, lr, 0, Math.PI * 2);
+          ctx!.strokeStyle = `hsla(${hue},90%,80%,${la})`;
+          ctx!.lineWidth   = 1.1 * (1 - lt * 0.4);
           ctx!.stroke();
         }
       }
 
       // ── Thinking: rotating dashed arcs ──────────────────────────────────
-      if (s === "thinking") {
+      if (s === "thinking" && t > 0.4) {
         ctx!.save();
         ctx!.translate(CX, CY);
-        [
-          { spd:  0.55, r: R * 1.38, arc: 0.65, lw: 1.5, a: 0.22, dash: [8,  14] },
-          { spd: -0.38, r: R * 1.62, arc: 0.45, lw: 1.1, a: 0.14, dash: [6,  18] },
-          { spd:  0.22, r: R * 1.84, arc: 0.30, lw: 0.8, a: 0.08, dash: [4,  22] },
-        ].forEach(({ spd, r, arc, lw, a, dash }) => {
+        ([
+          { spd:  0.50, r: 130, arc: 0.65, lw: 1.4, a: 0.20, dash: [8,  14] as [number,number] },
+          { spd: -0.34, r: 168, arc: 0.42, lw: 1.0, a: 0.12, dash: [5,  18] as [number,number] },
+          { spd:  0.20, r: 200, arc: 0.28, lw: 0.7, a: 0.07, dash: [4,  22] as [number,number] },
+        ] as const).forEach(({ spd, r, arc, lw, a, dash }) => {
           ctx!.save();
           ctx!.rotate(ph * spd);
           ctx!.beginPath();
-          ctx!.arc(0, 0, r, 0, Math.PI * arc);
-          ctx!.strokeStyle = `hsla(${hue},88%,74%,${a})`;
+          ctx!.arc(0, 0, r * t, 0, Math.PI * arc);
+          ctx!.strokeStyle = `hsla(${hue},88%,74%,${a * t})`;
           ctx!.lineWidth   = lw;
           ctx!.setLineDash(dash);
           ctx!.stroke();
@@ -197,27 +221,17 @@ export default function Orb({ state, onClick }: OrbProps) {
         ctx!.restore();
       }
 
-      // ── Speaking: shockwave rings ────────────────────────────────────────
-      if (s === "speaking") {
-        for (let w = 0; w < 4; w++) {
-          const t  = (ph * 2.0 + w * 0.25) % 1;
-          const rr = R * (1.05 + t * 2.2);
-          const wa = (1 - t) * (0.22 + vp * 0.18) * Math.max(0, 1 - w * 0.18);
-          ctx!.beginPath();
-          ctx!.arc(CX, CY, rr, 0, Math.PI * 2);
-          ctx!.strokeStyle = `hsla(${hue},88%,80%,${wa})`;
-          ctx!.lineWidth   = Math.max(0.4, 1.4 * (1 - t * 0.8));
-          ctx!.stroke();
-        }
-      }
-
-      // ── Wake: slow breathing ring ────────────────────────────────────────
-      if (s === "wake") {
-        const wr = R * (1.18 + 0.06 * Math.sin(ph * 0.45));
+      // ── Wake: subtle center click hint ───────────────────────────────────
+      if (s === "wake" && t < 0.08) {
+        const pulse = 0.5 + 0.5 * Math.sin(ph * 0.35);
         ctx!.beginPath();
-        ctx!.arc(CX, CY, wr, 0, Math.PI * 2);
-        ctx!.strokeStyle = `hsla(${hue},78%,65%,${0.07 + 0.03 * Math.sin(ph * 0.45)})`;
-        ctx!.lineWidth   = 0.7;
+        ctx!.arc(CX, CY, 6 + pulse * 3, 0, Math.PI * 2);
+        ctx!.fillStyle = `rgba(255,255,255,${0.07 + pulse * 0.05})`;
+        ctx!.fill();
+        ctx!.beginPath();
+        ctx!.arc(CX, CY, 22 + pulse * 4, 0, Math.PI * 2);
+        ctx!.strokeStyle = `rgba(255,255,255,${0.04 + pulse * 0.03})`;
+        ctx!.lineWidth = 0.6;
         ctx!.stroke();
       }
 
@@ -225,20 +239,23 @@ export default function Orb({ state, onClick }: OrbProps) {
     }
 
     draw();
-    return () => cancelAnimationFrame(frameRef.current);
+    return () => {
+      cancelAnimationFrame(frameRef.current);
+      window.removeEventListener("resize", resize);
+    };
   }, []);
 
   return (
     <canvas
       ref={canvasRef}
-      width={SIZE}
-      height={SIZE}
       onClick={onClick}
       style={{
-        cursor:  "pointer",
+        position: "fixed",
+        inset: 0,
+        width: "100%",
+        height: "100%",
+        cursor: "pointer",
         display: "block",
-        width:   "min(700px, 92vw)",
-        height:  "min(700px, 92vh)",
       }}
     />
   );
