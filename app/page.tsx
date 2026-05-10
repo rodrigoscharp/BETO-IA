@@ -320,8 +320,7 @@ export default function JarvisPage() {
   async function execGmail(_action: GmailAction): Promise<string> {
     try {
       const res = await fetch("/api/gmail/summary");
-      if (res.status === 401) { window.location.href = "/api/calendar/login"; return "Redirecionando para autorizar o Gmail."; }
-      if (res.status === 403) return "Permissão de Gmail não concedida. Faça login novamente.";
+      if (res.status === 401) { window.location.href = "/api/calendar/login"; return "Redirecionando para autorizar."; }
       const d = await res.json();
       return d.summary ?? d.error ?? "Não consegui verificar os emails.";
     } catch { return "Erro ao acessar o Gmail."; }

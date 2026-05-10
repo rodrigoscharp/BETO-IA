@@ -58,9 +58,14 @@ export async function GET(req: NextRequest) {
     );
 
     if (!listRes.ok) {
-      const err = await listRes.json();
-      if (listRes.status === 401 || listRes.status === 403) {
+      const err = await listRes.json().catch(() => ({}));
+      if (listRes.status === 401) {
         return NextResponse.json({ needsLogin: true }, { status: 401 });
+      }
+      if (listRes.status === 403) {
+        return NextResponse.json({
+          summary: "Não consigo acessar seu Gmail. Vá em console.cloud.google.com, abra APIs e Services, Library, busque Gmail API e clique em Enable. Depois acesse jarvis-beta-one.vercel.app barra api barra calendar barra login para reautorizar.",
+        });
       }
       return NextResponse.json({ error: err?.error?.message ?? "Erro ao listar emails" }, { status: 500 });
     }
