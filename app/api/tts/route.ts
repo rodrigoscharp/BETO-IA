@@ -1,12 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 
-// Voz masculina natural em pt-BR — "George" da ElevenLabs (multilingual v2)
-// Outras opções de voice_id masculinas:
-//   Adam     → pNInz6obpgDQGcFmaJgB  (grave, imponente)
-//   George   → JBFqnCBsd6RMkjVDRZzb  (natural, versátil) ← padrão
-//   Josh     → TxGEqnHWrfWFTfGW9XjX  (jovem, energético)
-//   Arnold   → VR6AewLTigWG4xSOukaG  (forte, marcante)
-const VOICE_ID = "ZqE9vIHPcrC35dZv0Svu"; // Adam Borges (pt-BR)
+// Free tier voices: Adam pNInz6obpgDQGcFmaJgB | Arnold VR6AewLTigWG4xSOukaG | Antoni ErXwobaYiN019PkySvjV
+const VOICE_ID = "pNInz6obpgDQGcFmaJgB"; // Adam — grave, imponente
 
 export async function POST(req: NextRequest) {
   try {
