@@ -319,7 +319,7 @@ export default function JarvisPage() {
   }
 
   /* ── Executors ────────────────────────────────────────────────────────── */
-  async function execSpotify(action: SpotifyAction): Promise<string | null> {
+  async function execSpotify(action: SpotifyAction): Promise<string> {
     try {
       const res = await fetch("/api/spotify/command", {
         method: "POST", headers: { "Content-Type": "application/json" },
@@ -327,18 +327,20 @@ export default function JarvisPage() {
       });
       if (res.status === 401) return "Spotify não autenticado. Recarregue a página.";
       const d = await res.json();
-      if (action.action === "current") {
-        return d.playing ? `Está tocando ${d.track} de ${d.artist}.` : "Nenhuma música tocando.";
-      }
-      if (d.spotifyUri) {
-        openSpotifyUri(d.spotifyUri);
-        if (d.track) return `Tocando ${d.track}${d.artist ? " de " + d.artist : ""} no Spotify.`;
-        if (d.name)  return `Abrindo ${d.name} no Spotify.`;
-      }
-      if (action.action === "play" && d.track) return `Tocando ${d.track}${d.artist ? " de " + d.artist : ""}.`;
-      if (action.action === "play" && d.name)  return `Tocando ${d.name}.`;
       if (d.error) return d.error;
-      return null;
+      if (action.action === "current") {
+        return d.playing ? `Tocando ${d.track} de ${d.artist}.` : "Nada tocando no momento.";
+      }
+      if (d.spotifyUri) openSpotifyUri(d.spotifyUri);
+      // Short affirmative — no need to repeat what the user asked
+      if (action.action === "play")     return d.track ? `${d.track}.` : "Pronto.";
+      if (action.action === "pause")    return "Pausado.";
+      if (action.action === "resume")   return "Continuando.";
+      if (action.action === "next")     return "Ok.";
+      if (action.action === "previous") return "Ok.";
+      if (action.action === "volume")   return "Feito.";
+      if (action.action === "shuffle")  return "Aleatório ativado.";
+      return "Pronto.";
     } catch { return "Erro ao conectar com o Spotify."; }
   }
 
@@ -539,7 +541,7 @@ export default function JarvisPage() {
       const say = (t: string) => speak(sanitize(t), done);
 
       if (spotify.action) {
-        say(await execSpotify(spotify.action) ?? spotify.text);
+        say(await execSpotify(spotify.action));
       } else if (calendar.action) {
         say(await execCalendar(calendar.action));
       } else if (whatsapp.action) {

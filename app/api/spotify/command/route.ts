@@ -107,8 +107,18 @@ export async function POST(req: NextRequest) {
           } else {
             const track = await searchTrack(token, query);
             if (!track) { result = { error: "Música não encontrada." }; break; }
-            // Return the Spotify URI so the client can open it directly in the app
-            // This works for both free and premium accounts
+
+            // Try API playback first (requires Premium + active device)
+            if (device_id) {
+              const r = await sp(token, "PUT", `/me/player/play?device_id=${device_id}`,
+                { uris: [track.uri] });
+              if (r.ok || r.status === 204) {
+                result = { ok: true, track: track.name, artist: track.artists?.[0]?.name };
+                break;
+              }
+            }
+
+            // Fallback: deep link (free users / no active device)
             result = { ok: true, spotifyUri: track.uri, track: track.name, artist: track.artists?.[0]?.name };
           }
         } else {
