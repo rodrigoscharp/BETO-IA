@@ -525,7 +525,13 @@ export default function JarvisPage() {
     };
     rec.onerror = () => { if (mode.current === "wake") timer.current = setTimeout(startWake, 800); };
     rec.onend   = () => { if (mode.current === "wake") timer.current = setTimeout(startWake, 400); };
-    try { rec.start(); } catch { /* mic not ready */ }
+    try {
+      rec.start();
+    } catch {
+      // rec.start() can throw if mic is busy — retry after a second
+      wakeRec.current = null;
+      if (mode.current === "wake") timer.current = setTimeout(startWake, 1000);
+    }
   }
 
   /* ── Main chat handler ────────────────────────────────────────────────── */
@@ -554,8 +560,7 @@ export default function JarvisPage() {
       const memory   = parseTag<MemoryAction>(rawReply,   MEMORY_TAG_RE);
       const briefing = parseTag<BriefingAction>(rawReply, BRIEFING_TAG_RE);
 
-      // After speaking, listen 4s for follow-up, then fall back to wake word mode
-      const done = () => setTimeout(() => startActive(4000), 400);
+      const done = () => { setMode("wake"); setTimeout(startWake, 300); };
 
       const say = (t: string) => speak(sanitize(t), done);
 

@@ -36,13 +36,14 @@ function mkParticles(w: number, h: number): P[] {
 }
 
 export default function Orb({ state, onClick }: OrbProps) {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const frameRef  = useRef(0);
-  const phRef     = useRef(0);
-  const tRef      = useRef(0);
-  const stateRef  = useRef(state);
-  const ptsRef    = useRef<P[]>([]);
-  const dimRef    = useRef({ w: 0, h: 0 });
+  const canvasRef   = useRef<HTMLCanvasElement>(null);
+  const frameRef    = useRef(0);
+  const phRef       = useRef(0);
+  const tRef        = useRef(0);
+  const stateRef    = useRef(state);
+  const prevStateRef = useRef<OrbState>(state);
+  const ptsRef      = useRef<P[]>([]);
+  const dimRef      = useRef({ w: 0, h: 0 });
 
   useEffect(() => { stateRef.current = state; }, [state]);
 
@@ -65,10 +66,24 @@ export default function Orb({ state, onClick }: OrbProps) {
     window.addEventListener("resize", resize);
 
     function draw() {
-      const s = stateRef.current;
+      const s    = stateRef.current;
+      const prev = prevStateRef.current;
       const { w, h } = dimRef.current;
       const CX = w / 2, CY = h / 2;
       const pts = ptsRef.current;
+
+      // Scatter particles outward when returning to wake state
+      if (prev !== "wake" && s === "wake") {
+        for (const p of pts) {
+          const dx = p.x - CX;
+          const dy = p.y - CY;
+          const dist = Math.hypot(dx, dy) || 1;
+          const speed = 2.5 + Math.random() * 3.5;
+          p.vx += (dx / dist) * speed + (Math.random() - 0.5) * 2;
+          p.vy += (dy / dist) * speed + (Math.random() - 0.5) * 2;
+        }
+      }
+      prevStateRef.current = s;
 
       phRef.current +=
         s === "speaking"  ? 0.070 :
@@ -108,14 +123,17 @@ export default function Orb({ state, onClick }: OrbProps) {
           p.vy += (ty - p.y) * 0.065 * t;
         }
 
-        // Idle drift: gentle random nudge
+        // Idle drift: very gentle in wake mode so particles glide slowly
         if (t < 0.98) {
-          p.vx += (Math.random() - 0.5) * 0.045 * (1 - t);
-          p.vy += (Math.random() - 0.5) * 0.045 * (1 - t);
+          const nudge = s === "wake" ? 0.010 : 0.045;
+          p.vx += (Math.random() - 0.5) * nudge * (1 - t);
+          p.vy += (Math.random() - 0.5) * nudge * (1 - t);
         }
 
-        p.vx *= 0.91;
-        p.vy *= 0.91;
+        // Less damping in wake so scatter momentum fades slowly → smooth drift
+        const damp = s === "wake" && t < 0.05 ? 0.972 : 0.91;
+        p.vx *= damp;
+        p.vy *= damp;
         p.x  += p.vx;
         p.y  += p.vy;
 
