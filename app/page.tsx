@@ -19,7 +19,22 @@ interface SR extends EventTarget {
 }
 interface SRCtor { new(): SR; }
 declare global {
-  interface Window { SpeechRecognition: SRCtor; webkitSpeechRecognition: SRCtor; }
+  interface Window {
+    SpeechRecognition: SRCtor;
+    webkitSpeechRecognition: SRCtor;
+    Spotify: { Player: new (opts: SpotifyPlayerOptions) => SpotifyPlayer };
+    onSpotifyWebPlaybackSDKReady: () => void;
+  }
+}
+
+interface SpotifyPlayerOptions {
+  name: string;
+  getOAuthToken: (cb: (t: string) => void) => void;
+  volume: number;
+}
+interface SpotifyPlayer {
+  addListener(event: string, cb: (arg: { device_id: string }) => void): void;
+  connect(): void;
 }
 
 type Mode = "idle" | "wake" | "listening" | "thinking" | "speaking";
@@ -114,18 +129,15 @@ export default function JarvisPage() {
 
   /* ── Spotify Web Playback SDK ────────────────────────────────────────── */
   function initSpotifySDK() {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    if ((window as any).Spotify) { createSpotifyPlayer(); return; }
+    if (window.Spotify) { createSpotifyPlayer(); return; }
     const s = document.createElement("script");
     s.src = "https://sdk.scdn.co/spotify-player.js"; s.async = true;
     document.head.appendChild(s);
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (window as any).onSpotifyWebPlaybackSDKReady = createSpotifyPlayer;
+    window.onSpotifyWebPlaybackSDKReady = createSpotifyPlayer;
   }
 
   function createSpotifyPlayer() {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const SDK = (window as any).Spotify;
+    const SDK = window.Spotify;
     if (!SDK) return;
     const player = new SDK.Player({
       name: "Jarvis",
