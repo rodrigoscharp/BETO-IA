@@ -58,6 +58,23 @@ const TIMER_TAG_RE    = /^\[TIMER:(\{[\s\S]*?\})\]\s*/;
 const MEMORY_TAG_RE   = /^\[MEMORY:(\{[\s\S]*?\})\]\s*/;
 const BRIEFING_TAG_RE = /^\[BRIEFING:(\{[\s\S]*?\})\]\s*/;
 
+function sanitize(text: string): string {
+  return text
+    .replace(/```[\s\S]*?```/g, "")           // code blocks
+    .replace(/`[^`\n]+`/g, "")                // inline code
+    .replace(/^\s*#{1,6}\s+/gm, "")           // headers
+    .replace(/\*\*([^*]+)\*\*/g, "$1")        // bold
+    .replace(/\*([^*\n]+)\*/g, "$1")          // italic
+    .replace(/^\s*[-*+]\s+/gm, "")            // bullet points
+    .replace(/^\s*\d+\.\s+/gm, "")            // numbered lists
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")  // markdown links
+    .replace(/https?:\/\/\S+/g, "")           // bare URLs
+    .replace(/\n{2,}/g, ". ")                 // paragraph breaks → pause
+    .replace(/\n/g, " ")                       // line breaks → space
+    .replace(/\s{2,}/g, " ")                  // collapse spaces
+    .trim();
+}
+
 function getSR(): SRCtor | null {
   if (typeof window === "undefined") return null;
   return window.SpeechRecognition ?? window.webkitSpeechRecognition ?? null;
@@ -519,25 +536,26 @@ export default function JarvisPage() {
       // After speaking, wait briefly then listen for follow-up (8s timeout falls back to wake)
       const done = () => setTimeout(startActive, 400);
 
+      const say = (t: string) => speak(sanitize(t), done);
+
       if (spotify.action) {
-        const override = await execSpotify(spotify.action);
-        speak(override ?? spotify.text, done);
+        say(await execSpotify(spotify.action) ?? spotify.text);
       } else if (calendar.action) {
-        speak(await execCalendar(calendar.action), done);
+        say(await execCalendar(calendar.action));
       } else if (whatsapp.action) {
-        speak(await execWhatsApp(whatsapp.action), done);
+        say(await execWhatsApp(whatsapp.action));
       } else if (github.action) {
-        speak(await execGithub(github.action), done);
+        say(await execGithub(github.action));
       } else if (gmail.action) {
-        speak(await execGmail(gmail.action), done);
+        say(await execGmail(gmail.action));
       } else if (timerTag.action) {
-        speak(execTimer(timerTag.action), done);
+        say(execTimer(timerTag.action));
       } else if (memory.action) {
-        speak(await execMemory(memory.action, memory.text), done);
+        say(await execMemory(memory.action, memory.text));
       } else if (briefing.action) {
-        speak(await execBriefing(), done);
+        say(await execBriefing());
       } else {
-        speak(rawReply, done);
+        say(rawReply);
       }
     } catch {
       speak("Desculpe, houve um erro na comunicação.", () => { setMode("wake"); startWake(); });
