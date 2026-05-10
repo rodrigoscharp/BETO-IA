@@ -311,9 +311,29 @@ export default function JarvisPage() {
   }
 
   function openSpotifyUri(uri: string) {
-    // Navigate to spotify: URI — browser hands it to the OS which opens the app.
-    // The page stays because spotify: is a custom protocol handled externally.
-    window.location.href = uri;
+    // Open Spotify app via deep link (anchor click is most reliable cross-browser)
+    const a = document.createElement("a");
+    a.href = uri;
+    a.style.cssText = "position:fixed;width:0;height:0;opacity:0;pointer-events:none;";
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => { try { a.remove(); } catch { /* ok */ } }, 500);
+
+    // Poll until Spotify is up, then force play via API (up to 10s)
+    let attempts = 0;
+    const poll = setInterval(async () => {
+      attempts++;
+      if (attempts > 10) { clearInterval(poll); return; }
+      try {
+        const res = await fetch("/api/spotify/command", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: "play_uri", uri }),
+        });
+        const d = await res.json();
+        if (d.ok) clearInterval(poll);
+      } catch { /* retry */ }
+    }, 1000);
   }
 
   /* ── Executors ────────────────────────────────────────────────────────── */

@@ -74,7 +74,7 @@ export async function POST(req: NextRequest) {
   if (!tokenResult) return NextResponse.json({ needsLogin: true }, { status: 401 });
 
   const { token } = tokenResult;
-  const { action, query, level, device_id } = await req.json();
+  const { action, query, level, device_id, uri: playUri } = await req.json();
   const deviceParam = device_id ? `?device_id=${device_id}` : "";
 
   let result: object = { ok: true };
@@ -167,6 +167,28 @@ export async function POST(req: NextRequest) {
         if (err) { result = { error: err }; break; }
         const d = await res.json();
         result = { playing: d.is_playing, track: d.item?.name, artist: d.item?.artists?.[0]?.name };
+        break;
+      }
+
+      // Called by client polling after opening Spotify via deep link
+      case "play_uri": {
+        if (!playUri) { result = { ok: false }; break; }
+        const devRes = await sp(token, "GET", "/me/player/devices");
+        if (devRes.ok) {
+          const dd = await devRes.json();
+          type SpDev = { id: string; name: string; is_active: boolean };
+          const devices: SpDev[] = (dd.devices ?? []).filter((d: SpDev) => d.name !== "Jarvis");
+          const device = devices.find(d => d.is_active) ?? devices[0];
+          if (device) {
+            const body = playUri.startsWith("spotify:track:")
+              ? { uris: [playUri] }
+              : { context_uri: playUri };
+            const r = await sp(token, "PUT", `/me/player/play?device_id=${device.id}`, body);
+            result = { ok: r.ok || r.status === 204 };
+            break;
+          }
+        }
+        result = { ok: false };
         break;
       }
 
