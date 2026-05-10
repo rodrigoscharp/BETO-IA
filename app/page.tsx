@@ -49,14 +49,14 @@ interface MemoryAction   { action: string; content?: string; category?: string; 
 interface BriefingAction { action: string; }
 
 const WAKE = ["jarvis", "olá jarvis", "ola jarvis", "hey jarvis", "ei jarvis"];
-const SPOTIFY_TAG_RE  = /^\[SPOTIFY:(\{[\s\S]*?\})\]\s*/;
-const CALENDAR_TAG_RE = /^\[CALENDAR:(\{[\s\S]*?\})\]\s*/;
-const WHATSAPP_TAG_RE = /^\[WHATSAPP:(\{[\s\S]*?\})\]\s*/;
-const GITHUB_TAG_RE   = /^\[GITHUB:(\{[\s\S]*?\})\]\s*/;
-const GMAIL_TAG_RE    = /^\[GMAIL:(\{[\s\S]*?\})\]\s*/;
-const TIMER_TAG_RE    = /^\[TIMER:(\{[\s\S]*?\})\]\s*/;
-const MEMORY_TAG_RE   = /^\[MEMORY:(\{[\s\S]*?\})\]\s*/;
-const BRIEFING_TAG_RE = /^\[BRIEFING:(\{[\s\S]*?\})\]\s*/;
+const SPOTIFY_TAG_RE  = /\[SPOTIFY:(\{[\s\S]*?\})\]\s*/;
+const CALENDAR_TAG_RE = /\[CALENDAR:(\{[\s\S]*?\})\]\s*/;
+const WHATSAPP_TAG_RE = /\[WHATSAPP:(\{[\s\S]*?\})\]\s*/;
+const GITHUB_TAG_RE   = /\[GITHUB:(\{[\s\S]*?\})\]\s*/;
+const GMAIL_TAG_RE    = /\[GMAIL:(\{[\s\S]*?\})\]\s*/;
+const TIMER_TAG_RE    = /\[TIMER:(\{[\s\S]*?\})\]\s*/;
+const MEMORY_TAG_RE   = /\[MEMORY:(\{[\s\S]*?\})\]\s*/;
+const BRIEFING_TAG_RE = /\[BRIEFING:(\{[\s\S]*?\})\]\s*/;
 
 function sanitize(text: string): string {
   return text
@@ -101,7 +101,7 @@ function pickVoice(): SpeechSynthesisVoice | null {
 function parseTag<T>(reply: string, re: RegExp): { action: T | null; text: string } {
   const m = reply.match(re);
   if (!m) return { action: null, text: reply };
-  try { return { action: JSON.parse(m[1]) as T, text: reply.slice(m[0].length).trim() }; }
+  try { return { action: JSON.parse(m[1]) as T, text: reply.replace(m[0], "").trim() }; }
   catch { return { action: null, text: reply }; }
 }
 
