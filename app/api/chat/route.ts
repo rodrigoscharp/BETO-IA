@@ -94,6 +94,19 @@ Exemplos:
 "o que você sabe sobre mim?" → [MEMORY:{"action":"list"}] Deixa eu ver o que guardei sobre você...`;
 }
 
+// Cache memórias por 5 min para não bater no Supabase a cada mensagem
+let _memCache: { data: { content: string; category: string }[]; ts: number } | null = null;
+async function getCachedMemories() {
+  if (_memCache && Date.now() - _memCache.ts < 5 * 60 * 1000) return _memCache.data;
+  try {
+    const data = await listMemories(25);
+    _memCache = { data, ts: Date.now() };
+    return data;
+  } catch {
+    return _memCache?.data ?? [];
+  }
+}
+
 export async function POST(req: NextRequest) {
   try {
     const { messages } = await req.json();
@@ -107,24 +120,19 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "GROQ_API_KEY não configurada no servidor." }, { status: 500 });
     }
 
-    // Busca memórias do Supabase para injetar no contexto
-    let memories: { content: string; category: string }[] = [];
-    try {
-      memories = await listMemories(25);
-    } catch {
-      // Se Supabase não estiver configurado, continua sem memórias
-    }
-
-    const groq = new Groq({ apiKey });
+    const [groq, memories] = await Promise.all([
+      Promise.resolve(new Groq({ apiKey })),
+      getCachedMemories(),
+    ]);
 
     const completion = await groq.chat.completions.create({
-      model: "llama-3.3-70b-versatile",
+      model: "llama-3.1-8b-instant",
       messages: [
         { role: "system", content: buildSystemPrompt(memories) },
         ...messages,
       ],
       temperature: 0.85,
-      max_tokens: 300,
+      max_tokens: 180,
     });
 
     const reply = completion.choices[0]?.message?.content ?? "";
