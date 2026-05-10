@@ -516,7 +516,8 @@ export default function JarvisPage() {
       const memory   = parseTag<MemoryAction>(rawReply,   MEMORY_TAG_RE);
       const briefing = parseTag<BriefingAction>(rawReply, BRIEFING_TAG_RE);
 
-      const done = () => { setMode("wake"); startWake(); };
+      // After speaking, wait briefly then listen for follow-up (8s timeout falls back to wake)
+      const done = () => setTimeout(startActive, 400);
 
       if (spotify.action) {
         const override = await execSpotify(spotify.action);
