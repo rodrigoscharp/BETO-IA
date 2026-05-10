@@ -311,11 +311,12 @@ export default function JarvisPage() {
   }
 
   function openSpotifyUri(uri: string) {
-    const iframe = document.createElement("iframe");
-    iframe.style.cssText = "position:fixed;width:0;height:0;border:0;opacity:0;pointer-events:none;";
-    iframe.src = uri;
-    document.body.appendChild(iframe);
-    setTimeout(() => { try { document.body.removeChild(iframe); } catch { /* ok */ } }, 3000);
+    // Convert spotify:type:id → https://open.spotify.com/type/id
+    const parts = uri.split(":");
+    const webUrl = parts.length === 3
+      ? `https://open.spotify.com/${parts[1]}/${parts[2]}`
+      : `https://open.spotify.com`;
+    window.open(webUrl, "_blank", "noopener");
   }
 
   /* ── Executors ────────────────────────────────────────────────────────── */
