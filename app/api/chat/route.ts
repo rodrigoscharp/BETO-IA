@@ -57,6 +57,14 @@ Ações:
 - "quanto tempo falta?" → [TIMER:{"action":"status"}]
 Quando o timer terminar, o Jarvis será notificado automaticamente pelo sistema.
 
+━━━ GMAIL ━━━
+Para consultar emails não lidos importantes:
+[GMAIL:{"action":"summary"}]
+Exemplos:
+"tem algum email importante?" → [GMAIL:{"action":"summary"}] Verificando sua caixa de entrada...
+"checa meus emails" → [GMAIL:{"action":"summary"}] Buscando emails não lidos...
+"alguma coisa no email?" → [GMAIL:{"action":"summary"}] Deixa eu dar uma olhada...
+
 ━━━ BRIEFING ━━━
 Quando ele pedir o briefing do dia, bom dia, resumo do dia, o que tem hoje, ou coisa similar pela manhã:
 [BRIEFING:{"action":"daily"}]

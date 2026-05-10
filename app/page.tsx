@@ -28,6 +28,7 @@ interface SpotifyAction  { action: string; query?: string; level?: number; }
 interface CalendarAction { action: string; title?: string; date?: string; time?: string; duration?: number; query?: string; }
 interface WhatsAppAction { action: string; to?: string; message?: string; }
 interface GithubAction   { action: string; repo?: string; }
+interface GmailAction    { action: string; }
 interface TimerAction    { action: string; minutes?: number; label?: string; }
 interface MemoryAction   { action: string; content?: string; category?: string; }
 interface BriefingAction { action: string; }
@@ -37,6 +38,7 @@ const SPOTIFY_TAG_RE  = /^\[SPOTIFY:(\{[\s\S]*?\})\]\s*/;
 const CALENDAR_TAG_RE = /^\[CALENDAR:(\{[\s\S]*?\})\]\s*/;
 const WHATSAPP_TAG_RE = /^\[WHATSAPP:(\{[\s\S]*?\})\]\s*/;
 const GITHUB_TAG_RE   = /^\[GITHUB:(\{[\s\S]*?\})\]\s*/;
+const GMAIL_TAG_RE    = /^\[GMAIL:(\{[\s\S]*?\})\]\s*/;
 const TIMER_TAG_RE    = /^\[TIMER:(\{[\s\S]*?\})\]\s*/;
 const MEMORY_TAG_RE   = /^\[MEMORY:(\{[\s\S]*?\})\]\s*/;
 const BRIEFING_TAG_RE = /^\[BRIEFING:(\{[\s\S]*?\})\]\s*/;
@@ -105,7 +107,7 @@ export default function JarvisPage() {
 
     fetch("/api/spotify/status")
       .then(r => r.json())
-      .then(d => { if (d.connected) initSpotifySDK(); else window.location.href = "/api/spotify/login"; })
+      .then(d => { if (d.connected) initSpotifySDK(); })
       .catch(() => {});
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -303,6 +305,16 @@ export default function JarvisPage() {
     } catch { return "Serviço WhatsApp não disponível."; }
   }
 
+  async function execGmail(_action: GmailAction): Promise<string> {
+    try {
+      const res = await fetch("/api/gmail/summary");
+      if (res.status === 401) { window.location.href = "/api/calendar/login"; return "Redirecionando para autorizar o Gmail."; }
+      if (res.status === 403) return "Permissão de Gmail não concedida. Faça login novamente.";
+      const d = await res.json();
+      return d.summary ?? d.error ?? "Não consegui verificar os emails.";
+    } catch { return "Erro ao acessar o Gmail."; }
+  }
+
   async function execGithub(action: GithubAction): Promise<string> {
     try {
       const res = await fetch("/api/github/command", {
@@ -421,6 +433,7 @@ export default function JarvisPage() {
       const calendar = parseTag<CalendarAction>(rawReply, CALENDAR_TAG_RE);
       const whatsapp = parseTag<WhatsAppAction>(rawReply, WHATSAPP_TAG_RE);
       const github   = parseTag<GithubAction>(rawReply,   GITHUB_TAG_RE);
+      const gmail    = parseTag<GmailAction>(rawReply,    GMAIL_TAG_RE);
       const timerTag = parseTag<TimerAction>(rawReply,    TIMER_TAG_RE);
       const memory   = parseTag<MemoryAction>(rawReply,   MEMORY_TAG_RE);
       const briefing = parseTag<BriefingAction>(rawReply, BRIEFING_TAG_RE);
@@ -436,6 +449,8 @@ export default function JarvisPage() {
         speak(await execWhatsApp(whatsapp.action), done);
       } else if (github.action) {
         speak(await execGithub(github.action), done);
+      } else if (gmail.action) {
+        speak(await execGmail(gmail.action), done);
       } else if (timerTag.action) {
         speak(execTimer(timerTag.action), done);
       } else if (memory.action) {

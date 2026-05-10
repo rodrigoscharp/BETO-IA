@@ -6,11 +6,8 @@ export async function GET(req: NextRequest) {
   const clientId = process.env.GOOGLE_CLIENT_ID;
   if (!clientId) return NextResponse.json({ error: "Google not configured" }, { status: 500 });
 
-  const origin = process.env.GOOGLE_REDIRECT_URI
-    ? process.env.GOOGLE_REDIRECT_URI.replace("/api/calendar/callback", "")
-    : `${req.nextUrl.protocol}//${req.nextUrl.host}`;
-
-  const redirectUri = `${origin}/api/calendar/callback`;
+  const redirectUri = process.env.GOOGLE_REDIRECT_URI
+    ?? `${req.nextUrl.protocol}//${req.nextUrl.host}/api/calendar/callback`;
 
   const params = new URLSearchParams({
     client_id:     clientId,
