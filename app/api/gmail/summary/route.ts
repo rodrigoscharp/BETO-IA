@@ -59,10 +59,8 @@ export async function GET(req: NextRequest) {
 
     if (!listRes.ok) {
       const err = await listRes.json();
-      if (listRes.status === 403) {
-        return NextResponse.json({
-          error: "Permissão de Gmail não concedida. Faça login novamente em /api/calendar/login.",
-        }, { status: 403 });
+      if (listRes.status === 401 || listRes.status === 403) {
+        return NextResponse.json({ needsLogin: true }, { status: 401 });
       }
       return NextResponse.json({ error: err?.error?.message ?? "Erro ao listar emails" }, { status: 500 });
     }
