@@ -463,40 +463,76 @@ export default function JarvisPage() {
   }
 
   /* ── Active listener ──────────────────────────────────────────────────── */
-  function startActive(timeoutMs = 8000) {
+  function startActive(timeoutMs = 12000) {
     const API = getSR();
     if (!API) return;
     setMode("listening");
     try { activeRec.current?.abort(); } catch { /* ok */ }
     const rec = new API();
     activeRec.current = rec;
-    rec.lang = "pt-BR"; rec.interimResults = false; rec.continuous = true; rec.maxAlternatives = 1;
+    rec.lang = "pt-BR"; rec.interimResults = true; rec.continuous = true; rec.maxAlternatives = 1;
 
     let captured = false;
+    let finalSegments = "";
+    let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+    let hardTimeout: ReturnType<typeof setTimeout>;
+
+    const doSubmit = (text: string) => {
+      if (captured) return;
+      const t = text.trim();
+      if (t.length < 2) return;
+      const lower = t.toLowerCase();
+      if (WAKE.some(w => lower === w || lower === w + ".")) return;
+      captured = true;
+      if (debounceTimer) { clearTimeout(debounceTimer); debounceTimer = null; }
+      clearTimeout(hardTimeout);
+      try { rec.abort(); } catch { /* ok */ }
+      sendToJarvis(t);
+    };
 
     rec.onresult = (e) => {
+      let full = finalSegments;
       for (let i = e.resultIndex; i < e.results.length; i++) {
+        const seg = e.results[i][0].transcript;
         if (e.results[i].isFinal) {
-          const text = e.results[i][0].transcript.trim();
-          const lower = text.toLowerCase();
-          // Ignore bare wake words — user may say "Jarvis" thinking they need to re-trigger
-          const isOnlyWake = WAKE.some(w => lower === w || lower === w + ".");
-          if (text.length >= 2 && !captured && !isOnlyWake) {
-            captured = true;
-            try { rec.abort(); } catch { /* ok */ }
-            sendToJarvis(text);
-          }
+          finalSegments += seg + " ";
+          full = finalSegments;
+        } else {
+          full = finalSegments + seg;
         }
       }
+      full = full.trim();
+      if (full.length < 2) return;
+      if (debounceTimer) clearTimeout(debounceTimer);
+      debounceTimer = setTimeout(() => doSubmit(full), 1200);
     };
-    rec.onerror = () => { if (!captured) { setMode("wake"); startWake(); } };
-    const timeout = setTimeout(() => {
+
+    rec.onerror = () => {
+      if (debounceTimer) clearTimeout(debounceTimer);
+      clearTimeout(hardTimeout);
+      if (!captured) {
+        if (finalSegments.trim().length >= 2) doSubmit(finalSegments);
+        else { setMode("wake"); startWake(); }
+      }
+    };
+
+    hardTimeout = setTimeout(() => {
       if (!captured && mode.current === "listening") {
         try { rec.abort(); } catch { /* ok */ }
-        setMode("wake"); startWake();
+        if (finalSegments.trim().length >= 2) doSubmit(finalSegments);
+        else { setMode("wake"); startWake(); }
       }
     }, timeoutMs);
-    rec.onend = () => { clearTimeout(timeout); if (!captured && mode.current === "listening") { setMode("wake"); startWake(); } };
+
+    rec.onend = () => {
+      if (debounceTimer) clearTimeout(debounceTimer);
+      clearTimeout(hardTimeout);
+      if (!captured && mode.current === "listening") {
+        if (finalSegments.trim().length >= 2) doSubmit(finalSegments);
+        else { setMode("wake"); startWake(); }
+      }
+    };
+
     try { rec.start(); } catch { setMode("wake"); startWake(); }
   }
 
