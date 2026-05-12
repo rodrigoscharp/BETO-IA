@@ -343,7 +343,7 @@ export default function JarvisPage() {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ ...action, device_id: deviceId.current }),
       });
-      if (res.status === 401) return "Spotify não autenticado. Recarregue a página.";
+      if (res.status === 401) { window.location.href = "/api/spotify/login"; return "Redirecionando para autenticar o Spotify."; }
       const d = await res.json();
       if (d.error) return d.error;
       if (action.action === "current") {
