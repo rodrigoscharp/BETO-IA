@@ -111,7 +111,7 @@ Regras:
 - Agrupe por tema se fizer sentido
 - Seja direto: "Você tem 2 emails importantes: um do João sobre o projeto X, e um do banco sobre..."
 - Se não houver nada relevante, diga isso
-- Responda em português brasileiro, tom casual, máximo 3 frases`,
+- Responda em português brasileiro, tom casual, máximo 4 frases curtas — complete sempre as frases, nunca corte no meio`,
         },
         {
           role: "user",
@@ -119,7 +119,7 @@ Regras:
         },
       ],
       temperature: 0.6,
-      max_tokens: 300,
+      max_tokens: 500,
     });
 
     const summary = completion.choices[0]?.message?.content ?? "Não consegui resumir os emails.";

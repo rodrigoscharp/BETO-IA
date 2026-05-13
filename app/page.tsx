@@ -474,6 +474,7 @@ export default function JarvisPage() {
 
     let captured = false;
     let finalSegments = "";
+    let lastFullText = "";
     let debounceTimer: ReturnType<typeof setTimeout> | null = null;
     let hardTimeout: ReturnType<typeof setTimeout>;
 
@@ -503,34 +504,35 @@ export default function JarvisPage() {
       }
       full = full.trim();
       if (full.length < 2) return;
+      lastFullText = full;
       if (debounceTimer) clearTimeout(debounceTimer);
       debounceTimer = setTimeout(() => doSubmit(full), 1200);
+    };
+
+    const fallback = () => {
+      if (captured) return;
+      const text = lastFullText || finalSegments;
+      if (text.trim().length >= 2) doSubmit(text);
+      else { setMode("wake"); startWake(); }
     };
 
     rec.onerror = () => {
       if (debounceTimer) clearTimeout(debounceTimer);
       clearTimeout(hardTimeout);
-      if (!captured) {
-        if (finalSegments.trim().length >= 2) doSubmit(finalSegments);
-        else { setMode("wake"); startWake(); }
-      }
+      fallback();
     };
 
     hardTimeout = setTimeout(() => {
       if (!captured && mode.current === "listening") {
         try { rec.abort(); } catch { /* ok */ }
-        if (finalSegments.trim().length >= 2) doSubmit(finalSegments);
-        else { setMode("wake"); startWake(); }
+        fallback();
       }
     }, timeoutMs);
 
     rec.onend = () => {
       if (debounceTimer) clearTimeout(debounceTimer);
       clearTimeout(hardTimeout);
-      if (!captured && mode.current === "listening") {
-        if (finalSegments.trim().length >= 2) doSubmit(finalSegments);
-        else { setMode("wake"); startWake(); }
-      }
+      if (!captured && mode.current === "listening") fallback();
     };
 
     try { rec.start(); } catch { setMode("wake"); startWake(); }
