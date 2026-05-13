@@ -1,14 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
 import Groq from "groq-sdk";
 import { getGoogleToken, gmailHeader, GmailMessage } from "@/lib/google";
+import { getBrasiliaTime } from "@/lib/time";
 
 /* ── Calendar: events for today ──────────────────────────────────────────── */
 
 async function getTodayEvents(token: string): Promise<string> {
   try {
-    const now   = new Date();
-    const start = new Date(now); start.setHours(0,  0,  0,   0);
-    const end   = new Date(now); end.setHours(23, 59, 59, 999);
+    const { date } = getBrasiliaTime();
+    // Build start/end anchored to Brasília midnight (UTC-3)
+    const start = new Date(`${date}T00:00:00-03:00`);
+    const end   = new Date(`${date}T23:59:59-03:00`);
 
     const params = new URLSearchParams({
       timeMin:      start.toISOString(),
@@ -132,12 +134,10 @@ export async function GET(req: NextRequest) {
     getWeather(),
   ]);
 
-  const today = new Date().toLocaleDateString("pt-BR", {
-    weekday: "long", day: "numeric", month: "long",
-  });
+  const { dateLabel, time, period } = getBrasiliaTime();
 
   const context = [
-    `Data: ${today}`,
+    `Data: ${dateLabel} — ${time}h (${period}, Brasília)`,
     `Agenda de hoje: ${events}`,
     `Emails não lidos: ${emails}`,
     weather ? `Clima: ${weather}` : null,
