@@ -47,6 +47,7 @@ interface Msg            { role: "user" | "assistant"; content: string }
 interface SpotifyAction  { action: string; query?: string; level?: number }
 interface CalendarAction { action: string; title?: string; date?: string; time?: string; duration?: number; query?: string }
 
+interface GmailAction    { action: string; days?: number }
 interface GithubAction   { action: string; repo?: string }
 interface TimerAction    { action: string; minutes?: number; label?: string }
 interface MemoryAction   { action: string; content?: string; category?: string }
@@ -494,9 +495,11 @@ export default function JarvisPage() {
     } catch { return "Erro ao conectar com o Google Calendar."; }
   }
 
-  async function execGmail(): Promise<string> {
+  async function execGmail(action: GmailAction): Promise<string> {
     try {
-      const res = await fetch("/api/gmail/summary");
+      const params = new URLSearchParams();
+      if (action.days) params.set("days", String(action.days));
+      const res = await fetch(`/api/gmail/summary?${params}`);
       if (res.status === 401) {
         window.location.href = "/api/calendar/login";
         return "Redirecionando para autorizar.";
@@ -721,7 +724,7 @@ export default function JarvisPage() {
       const calendar = parseTag<CalendarAction>(rawReply, TAG.CALENDAR);
 
       const github   = parseTag<GithubAction>(rawReply,   TAG.GITHUB);
-      const gmail    = parseTag<SpotifyAction>(rawReply,  TAG.GMAIL);
+      const gmail    = parseTag<GmailAction>(rawReply,    TAG.GMAIL);
       const timer    = parseTag<TimerAction>(rawReply,    TAG.TIMER);
       const memory   = parseTag<MemoryAction>(rawReply,   TAG.MEMORY);
       const briefing = parseTag<SpotifyAction>(rawReply,  TAG.BRIEFING);
@@ -730,7 +733,7 @@ export default function JarvisPage() {
       else if (calendar.action) say(await execCalendar(calendar.action));
 
       else if (github.action)   say(await execGithub(github.action));
-      else if (gmail.action)    say(await execGmail());
+      else if (gmail.action)    say(await execGmail(gmail.action));
       else if (timer.action)    say(execTimer(timer.action));
       else if (memory.action)   say(await execMemory(memory.action, memory.text));
       else if (briefing.action) say(await execBriefing());

@@ -13,20 +13,33 @@ function extractSender(from: string): string {
 function formatDate(rawDate: string): string {
   if (!rawDate) return "";
   try {
-    const d = new Date(rawDate);
-    if (isNaN(d.getTime())) return rawDate;
-    const now   = new Date();
-    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-    const msgDay = new Date(d.getFullYear(), d.getMonth(), d.getDate());
-    const diffDays = Math.round((today.getTime() - msgDay.getTime()) / 86_400_000);
-
+    const d    = new Date(rawDate);
+    if (isNaN(d.getTime())) return "";
+    const now  = new Date();
+    const diff = Math.round(
+      (new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime() -
+       new Date(d.getFullYear(),  d.getMonth(),  d.getDate()).getTime()) / 86_400_000
+    );
     const time = d.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
-    if (diffDays === 0) return `hoje às ${time}`;
-    if (diffDays === 1) return `ontem às ${time}`;
+    if (diff === 0) return `hoje às ${time}`;
+    if (diff === 1) return `ontem às ${time}`;
     return d.toLocaleDateString("pt-BR", { weekday: "short", day: "numeric", month: "short" }) + ` às ${time}`;
-  } catch {
-    return rawDate;
+  } catch { return ""; }
+}
+
+/* ── Gmail query builder ──────────────────────────────────────────────────── */
+
+function buildQuery(days?: number): string {
+  let q = "is:unread in:inbox";
+  if (days && days > 0) {
+    const after = new Date();
+    after.setDate(after.getDate() - days);
+    const y  = after.getFullYear();
+    const m  = String(after.getMonth() + 1).padStart(2, "0");
+    const d  = String(after.getDate()).padStart(2, "0");
+    q += ` after:${y}/${m}/${d}`;
   }
+  return q;
 }
 
 /* ── GET /api/gmail/summary ──────────────────────────────────────────────── */
@@ -38,9 +51,12 @@ export async function GET(req: NextRequest) {
   const apiKey = process.env.GROQ_API_KEY;
   if (!apiKey) return NextResponse.json({ error: "GROQ_API_KEY não configurada" }, { status: 500 });
 
+  const daysParam = req.nextUrl.searchParams.get("days");
+  const days      = daysParam ? parseInt(daysParam) : undefined;
+
   try {
     const listParams = new URLSearchParams({
-      q:          "is:unread in:inbox",
+      q:          buildQuery(days),
       maxResults: "20",
     });
 
@@ -61,11 +77,16 @@ export async function GET(req: NextRequest) {
     const listData = await listRes.json();
     const messages: { id: string }[] = listData.messages ?? [];
 
+    // No emails for the requested period — return clear "all good" message
     if (messages.length === 0) {
-      return NextResponse.json({ summary: "Nenhum email não lido na caixa de entrada.", count: 0 });
+      const period = days === 1 ? "hoje" : days === 2 ? "ontem e hoje" : days ? `nos últimos ${days} dias` : "na caixa de entrada";
+      return NextResponse.json({
+        summary: `Tudo nos conformes, sem novidades. Nenhum email não lido ${period}.`,
+        count: 0,
+      });
     }
 
-    // Fetch metadata: From, Subject, Date — never body/snippet to avoid hallucination
+    // Fetch real metadata — From, Subject, Date only (no body/snippet = no hallucination)
     const details: GmailMessage[] = await Promise.all(
       messages.slice(0, 15).map(async ({ id }) => {
         const r = await fetch(
@@ -76,7 +97,7 @@ export async function GET(req: NextRequest) {
       })
     );
 
-    // Build structured email list with real data only
+    // Build email list from real data only
     const emailList = details.map((msg, i) => {
       const from    = gmailHeader(msg, "From");
       const subject = gmailHeader(msg, "Subject") || "(sem assunto)";
@@ -86,31 +107,33 @@ export async function GET(req: NextRequest) {
       return `${i + 1}. Remetente: ${sender} <${email}> | Assunto: ${subject} | Recebido: ${date}`;
     }).join("\n");
 
+    const periodLabel = days === 1 ? "hoje" : days === 2 ? "de ontem e hoje" : days ? `dos últimos ${days} dias` : "não lidos";
+
     const groq       = new Groq({ apiKey });
     const completion = await groq.chat.completions.create({
       model:    "llama-3.3-70b-versatile",
       messages: [
         {
           role:    "system",
-          content: `Você é o assistente do Rodrigo. Analise os emails abaixo usando SOMENTE os dados fornecidos (remetente, assunto, data recebida). NUNCA invente, infira ou suponha conteúdo que não esteja explicitamente nos dados.
+          content: `Você analisa emails do Rodrigo. Use SOMENTE os dados fornecidos abaixo (remetente, assunto, data recebida). JAMAIS invente, complete ou suponha qualquer informação além do que está explícito nos campos.
 
-Classifique cada email em:
-- IMPORTANTE: emails de pessoas reais (nome próprio no remetente), empresas de trabalho, bancos, saúde, governo, entregas/correios, notificações de pagamento reais
-- PROMOCIONAL: newsletters, marketing, cupons, ofertas, "% off", "promoção", "exclusivo para você", plataformas de conteúdo (Udemy, Coursera, Medium etc.), redes sociais automáticas
+Classifique:
+- IMPORTANTE: pessoas reais (nome próprio), trabalho, bancos, saúde, governo, pagamentos, entregas
+- PROMOCIONAL: newsletters, marketing, "% off", promoções, Udemy, Medium, redes sociais automáticas
 
-Responda em português casual, como se estivesse contando para o Rodrigo. Siga este formato:
-- Se houver emails importantes: mencione cada um pelo nome do remetente e assunto EXATOS (sem inventar), com a data recebida
-- Agrupe os promocionais no final: "Além disso, X emails promocionais que você pode ignorar."
-- Se não houver nada importante: diga isso claramente
-- Máximo 5 frases. Nunca mencione conteúdo do email além do assunto.`,
+Resposta em português casual. Formato:
+- Emails importantes: cite remetente e assunto EXATOS, com data recebida
+- Promocionais: agrupe no final: "Além disso, X email(s) promocional(is) que você pode ignorar."
+- Se só houver promocionais: diga que não tem nada importante
+- Máximo 4 frases. Nunca mencione conteúdo além do assunto.`,
         },
         {
           role:    "user",
-          content: `${details.length} emails não lidos:\n\n${emailList}`,
+          content: `Emails ${periodLabel} (${details.length} no total):\n\n${emailList}`,
         },
       ],
-      temperature: 0.3,
-      max_tokens:  400,
+      temperature: 0.1,
+      max_tokens:  350,
     });
 
     const summary = completion.choices[0]?.message?.content ?? "Não consegui analisar os emails.";
