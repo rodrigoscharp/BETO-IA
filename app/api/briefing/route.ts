@@ -39,22 +39,28 @@ async function getTodayEvents(token: string): Promise<string> {
   }
 }
 
-/* ── Gmail: important unread emails ─────────────────────────────────────── */
+/* ── Gmail: unread emails formatted from real data (no LLM) ─────────────── */
 
-async function getImportantEmails(token: string, apiKey: string): Promise<string> {
+function extractSender(from: string): string {
+  const named = from.match(/^"?([^"<]+)"?\s*</);
+  if (named) return named[1].trim();
+  return from.split("@")[0] || from;
+}
+
+async function getUnreadEmails(token: string): Promise<string> {
   try {
     const listRes = await fetch(
-      "https://gmail.googleapis.com/gmail/v1/users/me/messages?q=is:unread+in:inbox+category:primary&maxResults=12",
+      "https://gmail.googleapis.com/gmail/v1/users/me/messages?q=is:unread+in:inbox+category:primary&maxResults=8",
       { headers: { Authorization: `Bearer ${token}` } }
     );
 
-    if (!listRes.ok) return "Sem acesso ao Gmail. Faça login novamente.";
+    if (!listRes.ok) return "Sem acesso ao Gmail.";
     const listData = await listRes.json();
     const messages: { id: string }[] = listData.messages ?? [];
     if (messages.length === 0) return "Nenhum email não lido.";
 
     const details: GmailMessage[] = await Promise.all(
-      messages.map(async ({ id }) => {
+      messages.slice(0, 5).map(async ({ id }) => {
         const r = await fetch(
           `https://gmail.googleapis.com/gmail/v1/users/me/messages/${id}?format=metadata&metadataHeaders=From&metadataHeaders=Subject`,
           { headers: { Authorization: `Bearer ${token}` } }
@@ -63,25 +69,13 @@ async function getImportantEmails(token: string, apiKey: string): Promise<string
       })
     );
 
-    const emailList = details.map((msg, i) =>
-      `${i + 1}. De: ${gmailHeader(msg, "From")} | Assunto: ${gmailHeader(msg, "Subject")} | ${(msg.snippet ?? "").slice(0, 150)}`
-    ).join("\n");
+    const items = details.map(msg => {
+      const sender  = extractSender(gmailHeader(msg, "From"));
+      const subject = gmailHeader(msg, "Subject") || "Sem assunto";
+      return `${sender}: ${subject}`;
+    }).join("; ");
 
-    const groq       = new Groq({ apiKey });
-    const completion = await groq.chat.completions.create({
-      model:    "llama-3.3-70b-versatile",
-      messages: [
-        {
-          role:    "system",
-          content: "Filtre apenas emails de pessoas reais, clientes, trabalho, bancos ou urgências. Ignore marketing, newsletters e notificações automáticas. Retorne um resumo de 1-2 frases em português casual. Se não houver nada relevante, diga 'nenhum email importante'. Seja muito conciso.",
-        },
-        { role: "user", content: emailList },
-      ],
-      temperature: 0.5,
-      max_tokens:  150,
-    });
-
-    return completion.choices[0]?.message?.content ?? "Nenhum email importante.";
+    return `${messages.length} não lido${messages.length > 1 ? "s" : ""} — ${items}`;
   } catch {
     return "Erro ao buscar emails.";
   }
@@ -116,7 +110,7 @@ export async function GET(req: NextRequest) {
 
   const [events, emails, weather] = await Promise.all([
     token ? getTodayEvents(token) : Promise.resolve("Calendário não conectado."),
-    token ? getImportantEmails(token, apiKey) : Promise.resolve("Gmail não conectado."),
+    token ? getUnreadEmails(token) : Promise.resolve("Gmail não conectado."),
     getWeather(),
   ]);
 
@@ -138,7 +132,7 @@ export async function GET(req: NextRequest) {
       messages: [
         {
           role:    "system",
-          content: "Você é o J.A.R.V.I.S do Rodrigo. Gere um briefing matinal falado, natural e motivador. Use as informações abaixo. Tom: casual, direto, animado mas sem exagero. Máximo 5 frases. Comece com 'Bom dia, Rodrigo!' ou similar. Cubra: data, agenda, emails importantes e clima se disponível. Termine com uma frase curta de incentivo.",
+          content: "Você é o J.A.R.V.I.S do Rodrigo. Gere um briefing matinal falado, natural e motivador usando APENAS as informações fornecidas abaixo — nunca invente, complete ou assuma nada que não esteja explícito. Tom: casual, direto. Máximo 5 frases. Comece com 'Bom dia, Rodrigo!'. Cubra: data, eventos do dia, emails (citar remetente e assunto exatos) e clima se disponível. Termine com uma frase curta de incentivo.",
         },
         { role: "user", content: context },
       ],

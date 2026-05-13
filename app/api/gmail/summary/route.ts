@@ -1,20 +1,24 @@
 import { NextRequest, NextResponse } from "next/server";
-import Groq from "groq-sdk";
 import { getGoogleToken, gmailHeader, GmailMessage } from "@/lib/google";
+
+/* ── Extracts a human-readable sender name from a "Name <email>" header ── */
+
+function extractSender(from: string): string {
+  const named = from.match(/^"?([^"<]+)"?\s*</);
+  if (named) return named[1].trim();
+  return from.split("@")[0] || from;
+}
 
 /* ── GET /api/gmail/summary ──────────────────────────────────────────────── */
 
 export async function GET(req: NextRequest) {
-  const token  = await getGoogleToken(req);
+  const token = await getGoogleToken(req);
   if (!token) return NextResponse.json({ needsLogin: true }, { status: 401 });
-
-  const apiKey = process.env.GROQ_API_KEY;
-  if (!apiKey) return NextResponse.json({ error: "GROQ_API_KEY não configurada" }, { status: 500 });
 
   try {
     const listParams = new URLSearchParams({
       q:          "is:unread in:inbox category:primary",
-      maxResults: "15",
+      maxResults: "10",
     });
 
     const listRes = await fetch(
@@ -33,54 +37,34 @@ export async function GET(req: NextRequest) {
 
     const listData = await listRes.json();
     const messages: { id: string }[] = listData.messages ?? [];
+
     if (messages.length === 0) {
       return NextResponse.json({ summary: "Nenhum email não lido na caixa de entrada.", count: 0 });
     }
 
     const details: GmailMessage[] = await Promise.all(
-      messages.slice(0, 12).map(async ({ id }) => {
+      messages.slice(0, 8).map(async ({ id }) => {
         const r = await fetch(
-          `https://gmail.googleapis.com/gmail/v1/users/me/messages/${id}?format=metadata&metadataHeaders=From&metadataHeaders=Subject&metadataHeaders=Date`,
+          `https://gmail.googleapis.com/gmail/v1/users/me/messages/${id}?format=metadata&metadataHeaders=From&metadataHeaders=Subject`,
           { headers: { Authorization: `Bearer ${token}` } }
         );
         return r.ok ? r.json() : { id, threadId: id };
       })
     );
 
-    const emailList = details.map((msg, i) => {
-      const from    = gmailHeader(msg, "From");
-      const subject = gmailHeader(msg, "Subject");
-      const snippet = msg.snippet ?? "";
-      return `${i + 1}. De: ${from}\n   Assunto: ${subject}\n   Prévia: ${snippet.slice(0, 200)}`;
-    }).join("\n\n");
-
-    const groq       = new Groq({ apiKey });
-    const completion = await groq.chat.completions.create({
-      model:    "llama-3.3-70b-versatile",
-      messages: [
-        {
-          role:    "system",
-          content: `Você é um assistente pessoal do Rodrigo. Analise os emails abaixo e faça um resumo falado, natural e conciso — como se estivesse contando pra ele de forma amigável.
-
-Regras:
-- Ignore emails de marketing, promoções, newsletters, notificações automáticas de apps
-- Foque em: emails de pessoas reais, clientes, trabalho importante, bancos, saúde, urgências
-- Agrupe por tema se fizer sentido
-- Seja direto: "Você tem 2 emails importantes: um do João sobre o projeto X, e um do banco sobre..."
-- Se não houver nada relevante, diga isso
-- Responda em português brasileiro, tom casual, máximo 4 frases curtas — complete sempre as frases, nunca corte no meio`,
-        },
-        {
-          role:    "user",
-          content: `Emails não lidos (${details.length}):\n\n${emailList}`,
-        },
-      ],
-      temperature: 0.6,
-      max_tokens:  500,
+    // Build summary from real data only — no LLM to avoid hallucination
+    const items = details.slice(0, 6).map(msg => {
+      const sender  = extractSender(gmailHeader(msg, "From"));
+      const subject = gmailHeader(msg, "Subject") || "Sem assunto";
+      return `de ${sender}: ${subject}`;
     });
 
-    const summary = completion.choices[0]?.message?.content ?? "Não consegui resumir os emails.";
-    return NextResponse.json({ summary, count: details.length });
+    const count   = details.length;
+    const listed  = items.join(". ");
+    const extra   = count > items.length ? ` E mais ${count - items.length} outros.` : "";
+    const summary = `Você tem ${count} email${count > 1 ? "s" : ""} não lido${count > 1 ? "s" : ""} na caixa principal. ${listed}.${extra}`;
+
+    return NextResponse.json({ summary, count });
   } catch (err) {
     const msg = err instanceof Error ? err.message : "Erro desconhecido";
     return NextResponse.json({ error: msg }, { status: 500 });
