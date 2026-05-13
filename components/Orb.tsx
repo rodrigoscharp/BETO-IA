@@ -111,8 +111,8 @@ export default function Orb({ state, onClick }: OrbProps) {
       prevRef.current = s;
 
       /* ── Timing ── */
-      const spinSpd = s === "thinking" ? 0.013 : s === "speaking" ? 0.010 : s === "listening" ? 0.005 : 0.0008;
-      phRef.current   += s === "speaking" ? 0.068 : s === "thinking" ? 0.040 : s === "listening" ? 0.022 : 0.007;
+      const spinSpd = s === "thinking" ? 0.013 : s === "speaking" ? 0.004 : s === "listening" ? 0.005 : 0.0008;
+      phRef.current   += s === "speaking" ? 0.016 : s === "thinking" ? 0.040 : s === "listening" ? 0.022 : 0.007;
       rotYRef.current += spinSpd;
       rotXRef.current  = Math.sin(phRef.current * 0.07) * 0.14;
 
@@ -124,13 +124,11 @@ export default function Orb({ state, onClick }: OrbProps) {
       tRef.current += ((s !== "wake" ? 1 : 0) - tRef.current) * 0.030;
       const t = tRef.current;
 
-      /* ── Speaking pulse ── */
+      /* ── Speaking pulse — single slow breath ── */
       const pulse = s === "speaking"
-        ? 0.5 * Math.abs(Math.sin(ph * 3.7))
-        + 0.3 * Math.abs(Math.sin(ph * 7.2 + 1.1))
-        + 0.2 * Math.abs(Math.sin(ph * 13  + 2.3))
+        ? 0.5 + 0.5 * Math.sin(ph)   // one smooth slow wave, 0..1
         : 0;
-      const curR = R * (1 + pulse * 0.20);
+      const curR = R * (1 + pulse * 0.06);
 
       /* ── Color ── */
       const hue = s === "thinking" ? 265 : s === "listening" ? 188 : s === "speaking" ? 205 : 215;
@@ -208,8 +206,8 @@ export default function Orb({ state, onClick }: OrbProps) {
 
       /* ── Central glow ── */
       if (t > 0.04) {
-        const ambR = (s === "speaking" ? 290 + pulse * 110 : 215) * t;
-        const ambA = t * (s === "speaking" ? 0.08 + pulse * 0.06 : 0.045);
+        const ambR = (s === "speaking" ? 215 + pulse * 22 : 215) * t;
+        const ambA = t * (s === "speaking" ? 0.032 + pulse * 0.012 : 0.045);
         const ga   = ctx.createRadialGradient(CX, CY, 0, CX, CY, ambR);
         ga.addColorStop(0,   `hsla(${hue},85%,65%,0)`);
         ga.addColorStop(0.4, `hsla(${hue},80%,60%,${ambA * 0.4})`);
@@ -218,8 +216,8 @@ export default function Orb({ state, onClick }: OrbProps) {
         ctx.beginPath(); ctx.arc(CX, CY, ambR, 0, Math.PI * 2);
         ctx.fillStyle = ga; ctx.fill();
 
-        const coreR = (s === "speaking" ? 34 + pulse * 22 : 18 + 4 * Math.sin(ph * 0.75)) * t;
-        const coreA = t * (s === "speaking" ? 0.88 + pulse * 0.12 : 0.52);
+        const coreR = (s === "speaking" ? 18 + pulse * 5 : 18 + 4 * Math.sin(ph * 0.75)) * t;
+        const coreA = t * (s === "speaking" ? 0.38 + pulse * 0.08 : 0.52);
         const gc    = ctx.createRadialGradient(CX, CY, 0, CX, CY, coreR * 2.8);
         gc.addColorStop(0,    `rgba(255,255,255,${coreA})`);
         gc.addColorStop(0.22, `hsla(${hue},90%,92%,${coreA * 0.55})`);
@@ -229,15 +227,15 @@ export default function Orb({ state, onClick }: OrbProps) {
         ctx.fillStyle = gc; ctx.fill();
       }
 
-      /* ── Speaking: shockwave rings ── */
+      /* ── Speaking: slow breathing rings ── */
       if (s === "speaking" && t > 0.4) {
-        for (let i = 0; i < 4; i++) {
-          const wt = (ph * 1.7 + i * 0.25) % 1;
-          const wr = (curR * 0.38 + wt * curR * 2.3) * t;
-          const wa = (1 - wt) * (0.13 + pulse * 0.11) * t;
+        for (let i = 0; i < 2; i++) {
+          const wt = (ph * 0.5 + i * 0.5) % 1;
+          const wr = (curR * 0.6 + wt * curR * 1.4) * t;
+          const wa = (1 - wt) * 0.06 * t;
           ctx.beginPath(); ctx.arc(CX, CY, wr, 0, Math.PI * 2);
-          ctx.strokeStyle = `hsla(${hue},88%,82%,${wa})`;
-          ctx.lineWidth   = Math.max(0.3, 1.2 * (1 - wt));
+          ctx.strokeStyle = `hsla(${hue},70%,75%,${wa})`;
+          ctx.lineWidth   = Math.max(0.3, 0.8 * (1 - wt));
           ctx.stroke();
         }
       }
