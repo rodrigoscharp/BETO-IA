@@ -55,7 +55,7 @@ interface MemoryAction   { action: string; content?: string; category?: string }
    Constants
 ══════════════════════════════════════════════════════════════════════════ */
 
-const WAKE_WORDS = ["jarvis", "olá jarvis", "ola jarvis", "hey jarvis", "ei jarvis"];
+const WAKE_WORDS = ["jarvis", "olá jarvis", "ola jarvis", "hey jarvis", "ei jarvis", "acorda jarvis", "acorda, jarvis"];
 
 const TAG = {
   SPOTIFY:  /\[SPOTIFY:(\{[\s\S]*?\})\]\s*/,
@@ -136,6 +136,7 @@ export default function JarvisPage() {
   const [orbState,     setOrbState]     = useState<OrbState>("wake");
   const [caption,      setCaption]      = useState("");
   const [timerDisplay, setTimerDisplay] = useState<{ label: string; timeLeft: number } | null>(null);
+  const [audioReady,   setAudioReady]   = useState(false);
 
   const mode           = useRef<Mode>("idle");
   const history        = useRef<Msg[]>([]);
@@ -143,28 +144,62 @@ export default function JarvisPage() {
   const activeRec      = useRef<SR | null>(null);
   const restartTimer   = useRef<ReturnType<typeof setTimeout> | null>(null);
   const deviceId       = useRef<string | null>(null);
-  const started        = useRef(false);
   const audioRef       = useRef<HTMLAudioElement | null>(null);
+  const audioUnlocked  = useRef(false);
   const timerInterval  = useRef<ReturnType<typeof setInterval> | null>(null);
   const timerSecsLeft  = useRef(0);
   const timerLabel     = useRef("");
 
-  /* ── Lifecycle: auth + SDK init on mount ─────────────────────────────── */
+  /* ── Lifecycle: auto-start on mount ─────────────────────────────────── */
 
   useEffect(() => {
+    // Spotify OAuth callback
     const params = new URLSearchParams(window.location.search);
     if (params.get("spotify") === "ok") {
       window.history.replaceState({}, "", "/");
       initSpotifySDK();
-      return;
-    }
-    if (params.get("calendar") === "ok") {
+    } else if (params.get("calendar") === "ok") {
       window.history.replaceState({}, "", "/");
     }
+
     fetch("/api/spotify/status")
       .then(r => r.json())
       .then(d => { if (d.connected) initSpotifySDK(); })
       .catch(() => {});
+
+    // Auto-start wake word listener — no click needed
+    if (window.speechSynthesis) window.speechSynthesis.getVoices();
+    setMode("wake");
+    startWake();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  /* ── Lifecycle: unlock audio on first user interaction ───────────────── */
+
+  useEffect(() => {
+    const unlock = () => {
+      if (audioUnlocked.current) return;
+      audioUnlocked.current = true;
+      const synth = window.speechSynthesis;
+      if (synth) {
+        synth.onvoiceschanged = () => synth.getVoices();
+        const u = new SpeechSynthesisUtterance(" ");
+        u.volume = 0;
+        synth.speak(u);
+      }
+      setAudioReady(true);
+      document.removeEventListener("click",      unlock);
+      document.removeEventListener("touchstart", unlock);
+      document.removeEventListener("keydown",    unlock);
+    };
+    document.addEventListener("click",      unlock, { passive: true });
+    document.addEventListener("touchstart", unlock, { passive: true });
+    document.addEventListener("keydown",    unlock, { passive: true });
+    return () => {
+      document.removeEventListener("click",      unlock);
+      document.removeEventListener("touchstart", unlock);
+      document.removeEventListener("keydown",    unlock);
+    };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -722,21 +757,6 @@ export default function JarvisPage() {
   /* ── Click / tap handler ─────────────────────────────────────────────── */
 
   function handleClick() {
-    if (!started.current) {
-      started.current = true;
-      const synth = window.speechSynthesis;
-      if (synth) {
-        synth.getVoices();
-        synth.onvoiceschanged = () => synth.getVoices();
-        const u = new SpeechSynthesisUtterance(" ");
-        u.volume = 0;
-        synth.speak(u);
-      }
-      setMode("wake");
-      startWake();
-      return;
-    }
-
     const m = mode.current;
     if (m === "thinking") return;
 
@@ -756,6 +776,7 @@ export default function JarvisPage() {
       return;
     }
 
+    // wake mode: tap orb to skip wake word and go straight to listening
     try { wakeRec.current?.abort(); } catch { /* ok */ }
     wakeRec.current = null;
     clearRestartTimer();
@@ -780,6 +801,20 @@ export default function JarvisPage() {
       }}>
         JARVIS · ONLINE
       </div>
+
+      {/* Audio unlock hint — fades away after first interaction */}
+      {!audioReady && (
+        <div style={{
+          position: "fixed", bottom: 28, left: "50%", transform: "translateX(-50%)",
+          zIndex: 20, pointerEvents: "none", userSelect: "none",
+          color: "rgba(255,255,255,0.22)",
+          fontSize: 11, fontFamily: "monospace", letterSpacing: "0.12em",
+          textTransform: "uppercase",
+          animation: "fadeUp 0.6s ease both",
+        }}>
+          toque em qualquer lugar para ativar o áudio
+        </div>
+      )}
 
       {/* Countdown timer — top right */}
       {timerDisplay && (
