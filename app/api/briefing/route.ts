@@ -39,7 +39,7 @@ async function getTodayEvents(token: string): Promise<string> {
   }
 }
 
-/* ── Gmail: unread emails formatted from real data (no LLM) ─────────────── */
+/* ── Gmail: unread emails — real metadata only, classified by LLM ────────── */
 
 function extractSender(from: string): string {
   const named = from.match(/^"?([^"<]+)"?\s*</);
@@ -47,10 +47,27 @@ function extractSender(from: string): string {
   return from.split("@")[0] || from;
 }
 
+function formatDate(rawDate: string): string {
+  if (!rawDate) return "";
+  try {
+    const d   = new Date(rawDate);
+    if (isNaN(d.getTime())) return "";
+    const now     = new Date();
+    const diffDays = Math.round(
+      (new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime() -
+       new Date(d.getFullYear(),  d.getMonth(),  d.getDate()).getTime()) / 86_400_000
+    );
+    const time = d.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
+    if (diffDays === 0) return `hoje às ${time}`;
+    if (diffDays === 1) return `ontem às ${time}`;
+    return d.toLocaleDateString("pt-BR", { weekday: "short", day: "numeric", month: "short" });
+  } catch { return ""; }
+}
+
 async function getUnreadEmails(token: string): Promise<string> {
   try {
     const listRes = await fetch(
-      "https://gmail.googleapis.com/gmail/v1/users/me/messages?q=is:unread+in:inbox+category:primary&maxResults=8",
+      "https://gmail.googleapis.com/gmail/v1/users/me/messages?q=is:unread+in:inbox&maxResults=10",
       { headers: { Authorization: `Bearer ${token}` } }
     );
 
@@ -60,9 +77,9 @@ async function getUnreadEmails(token: string): Promise<string> {
     if (messages.length === 0) return "Nenhum email não lido.";
 
     const details: GmailMessage[] = await Promise.all(
-      messages.slice(0, 5).map(async ({ id }) => {
+      messages.slice(0, 8).map(async ({ id }) => {
         const r = await fetch(
-          `https://gmail.googleapis.com/gmail/v1/users/me/messages/${id}?format=metadata&metadataHeaders=From&metadataHeaders=Subject`,
+          `https://gmail.googleapis.com/gmail/v1/users/me/messages/${id}?format=metadata&metadataHeaders=From&metadataHeaders=Subject&metadataHeaders=Date`,
           { headers: { Authorization: `Bearer ${token}` } }
         );
         return r.ok ? r.json() : { id, threadId: id };
@@ -71,11 +88,12 @@ async function getUnreadEmails(token: string): Promise<string> {
 
     const items = details.map(msg => {
       const sender  = extractSender(gmailHeader(msg, "From"));
-      const subject = gmailHeader(msg, "Subject") || "Sem assunto";
-      return `${sender}: ${subject}`;
+      const subject = gmailHeader(msg, "Subject") || "(sem assunto)";
+      const date    = formatDate(gmailHeader(msg, "Date"));
+      return `${sender}: "${subject}"${date ? ` (${date})` : ""}`;
     }).join("; ");
 
-    return `${messages.length} não lido${messages.length > 1 ? "s" : ""} — ${items}`;
+    return `${messages.length} não lidos — ${items}`;
   } catch {
     return "Erro ao buscar emails.";
   }
