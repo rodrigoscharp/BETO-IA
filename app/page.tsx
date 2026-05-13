@@ -46,7 +46,7 @@ type Mode = "idle" | "wake" | "listening" | "thinking" | "speaking";
 interface Msg            { role: "user" | "assistant"; content: string }
 interface SpotifyAction  { action: string; query?: string; level?: number }
 interface CalendarAction { action: string; title?: string; date?: string; time?: string; duration?: number; query?: string }
-interface WhatsAppAction { action: string; to?: string; message?: string }
+
 interface GithubAction   { action: string; repo?: string }
 interface TimerAction    { action: string; minutes?: number; label?: string }
 interface MemoryAction   { action: string; content?: string; category?: string }
@@ -60,7 +60,7 @@ const WAKE_WORDS = ["jarvis", "olá jarvis", "ola jarvis", "hey jarvis", "ei jar
 const TAG = {
   SPOTIFY:  /\[SPOTIFY:(\{[\s\S]*?\})\]\s*/,
   CALENDAR: /\[CALENDAR:(\{[\s\S]*?\})\]\s*/,
-  WHATSAPP: /\[WHATSAPP:(\{[\s\S]*?\})\]\s*/,
+
   GITHUB:   /\[GITHUB:(\{[\s\S]*?\})\]\s*/,
   GMAIL:    /\[GMAIL:(\{[\s\S]*?\})\]\s*/,
   TIMER:    /\[TIMER:(\{[\s\S]*?\})\]\s*/,
@@ -494,19 +494,6 @@ export default function JarvisPage() {
     } catch { return "Erro ao conectar com o Google Calendar."; }
   }
 
-  async function execWhatsApp(action: WhatsAppAction): Promise<string> {
-    try {
-      const res  = await fetch("/api/whatsapp/command", {
-        method:  "POST",
-        headers: { "Content-Type": "application/json" },
-        body:    JSON.stringify(action),
-      });
-      const data = await res.json();
-      if (data.error) return data.error;
-      return data.ok ? "Mensagem enviada com sucesso." : "Não consegui enviar a mensagem.";
-    } catch { return "Serviço WhatsApp não disponível."; }
-  }
-
   async function execGmail(): Promise<string> {
     try {
       const res = await fetch("/api/gmail/summary");
@@ -732,7 +719,7 @@ export default function JarvisPage() {
 
       const spotify  = parseTag<SpotifyAction>(rawReply,  TAG.SPOTIFY);
       const calendar = parseTag<CalendarAction>(rawReply, TAG.CALENDAR);
-      const whatsapp = parseTag<WhatsAppAction>(rawReply, TAG.WHATSAPP);
+
       const github   = parseTag<GithubAction>(rawReply,   TAG.GITHUB);
       const gmail    = parseTag<SpotifyAction>(rawReply,  TAG.GMAIL);
       const timer    = parseTag<TimerAction>(rawReply,    TAG.TIMER);
@@ -741,7 +728,7 @@ export default function JarvisPage() {
 
       if      (spotify.action)  say(await execSpotify(spotify.action));
       else if (calendar.action) say(await execCalendar(calendar.action));
-      else if (whatsapp.action) say(await execWhatsApp(whatsapp.action));
+
       else if (github.action)   say(await execGithub(github.action));
       else if (gmail.action)    say(await execGmail());
       else if (timer.action)    say(execTimer(timer.action));

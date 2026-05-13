@@ -30,14 +30,6 @@ Para criar ou consultar eventos:
 [CALENDAR:{"action":"list"}]
 Regras: sempre 24h. Hoje é ${new Date().toISOString().split("T")[0]}.
 
-━━━ WHATSAPP ━━━
-Quando ele pedir para mandar mensagem ou zap para alguém:
-[WHATSAPP:{"action":"send","to":"nome do contato ou número","message":"texto da mensagem"}]
-Exemplos:
-"manda zap pra mamãe dizendo que chego tarde" → [WHATSAPP:{"action":"send","to":"mamãe","message":"Oi mãe, vou chegar tarde hoje!"}] Mensagem enviada pra sua mãe.
-"avisa o João que a reunião foi cancelada" → [WHATSAPP:{"action":"send","to":"joão","message":"Oi João, a reunião foi cancelada."}] Avisando o João.
-Use o nome exato que está em contacts.json. A mensagem deve ser natural, como se o Rodrigo tivesse escrito.
-
 ━━━ GITHUB ━━━
 Para consultar repositórios, PRs, issues ou commits:
 [GITHUB:{"action":"...","repo":"nome-do-repo"}]
