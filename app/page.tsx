@@ -2,107 +2,98 @@
 
 import { useState, useRef, useEffect } from "react";
 import Orb, { OrbState } from "@/components/Orb";
+import MiniPlayer from "@/components/MiniPlayer";
 
-/* ── Speech Recognition shim ─────────────────────────────────────────────── */
+/* ══════════════════════════════════════════════════════════════════════════
+   Types
+══════════════════════════════════════════════════════════════════════════ */
+
 interface SREvent extends Event {
   resultIndex: number;
-  results: SpeechRecognitionResultList;
+  results:     SpeechRecognitionResultList;
 }
 interface SR extends EventTarget {
-  lang: string; interimResults: boolean;
-  continuous: boolean; maxAlternatives: number;
+  lang: string; interimResults: boolean; continuous: boolean; maxAlternatives: number;
   start(): void; stop(): void; abort(): void;
-  onstart:  ((e: Event) => void) | null;
+  onstart:  ((e: Event)   => void) | null;
   onresult: ((e: SREvent) => void) | null;
-  onerror:  ((e: Event) => void) | null;
-  onend:    ((e: Event) => void) | null;
+  onerror:  ((e: Event)   => void) | null;
+  onend:    ((e: Event)   => void) | null;
 }
 interface SRCtor { new(): SR; }
+
 declare global {
   interface Window {
-    SpeechRecognition: SRCtor;
-    webkitSpeechRecognition: SRCtor;
-    Spotify: { Player: new (opts: SpotifyPlayerOptions) => SpotifyPlayer };
+    SpeechRecognition:          SRCtor;
+    webkitSpeechRecognition:    SRCtor;
+    Spotify:                    { Player: new (opts: SpotifySDKOptions) => SpotifySDKPlayer };
     onSpotifyWebPlaybackSDKReady: () => void;
   }
 }
 
-interface SpotifyPlayerOptions {
+interface SpotifySDKOptions {
   name: string;
   getOAuthToken: (cb: (t: string) => void) => void;
   volume: number;
 }
-interface SpotifyPlayer {
+interface SpotifySDKPlayer {
   addListener(event: string, cb: (arg: { device_id: string }) => void): void;
   connect(): void;
 }
 
 type Mode = "idle" | "wake" | "listening" | "thinking" | "speaking";
-interface Msg { role: "user" | "assistant"; content: string; }
-interface SpotifyAction  { action: string; query?: string; level?: number; }
-interface CalendarAction { action: string; title?: string; date?: string; time?: string; duration?: number; query?: string; }
-interface WhatsAppAction { action: string; to?: string; message?: string; }
-interface GithubAction   { action: string; repo?: string; }
-interface GmailAction    { action: string; }
-interface TimerAction    { action: string; minutes?: number; label?: string; }
-interface MemoryAction   { action: string; content?: string; category?: string; }
-interface BriefingAction { action: string; }
 
-const WAKE = ["jarvis", "olá jarvis", "ola jarvis", "hey jarvis", "ei jarvis"];
-const SPOTIFY_TAG_RE  = /\[SPOTIFY:(\{[\s\S]*?\})\]\s*/;
-const CALENDAR_TAG_RE = /\[CALENDAR:(\{[\s\S]*?\})\]\s*/;
-const WHATSAPP_TAG_RE = /\[WHATSAPP:(\{[\s\S]*?\})\]\s*/;
-const GITHUB_TAG_RE   = /\[GITHUB:(\{[\s\S]*?\})\]\s*/;
-const GMAIL_TAG_RE    = /\[GMAIL:(\{[\s\S]*?\})\]\s*/;
-const TIMER_TAG_RE    = /\[TIMER:(\{[\s\S]*?\})\]\s*/;
-const MEMORY_TAG_RE   = /\[MEMORY:(\{[\s\S]*?\})\]\s*/;
-const BRIEFING_TAG_RE = /\[BRIEFING:(\{[\s\S]*?\})\]\s*/;
+interface Msg            { role: "user" | "assistant"; content: string }
+interface SpotifyAction  { action: string; query?: string; level?: number }
+interface CalendarAction { action: string; title?: string; date?: string; time?: string; duration?: number; query?: string }
+interface WhatsAppAction { action: string; to?: string; message?: string }
+interface GithubAction   { action: string; repo?: string }
+interface TimerAction    { action: string; minutes?: number; label?: string }
+interface MemoryAction   { action: string; content?: string; category?: string }
 
-function sanitize(text: string): string {
-  return text
-    .replace(/```[\s\S]*?```/g, "")           // code blocks
-    .replace(/`[^`\n]+`/g, "")                // inline code
-    .replace(/^\s*#{1,6}\s+/gm, "")           // headers
-    .replace(/\*\*([^*]+)\*\*/g, "$1")        // bold
-    .replace(/\*([^*\n]+)\*/g, "$1")          // italic
-    .replace(/^\s*[-*+]\s+/gm, "")            // bullet points
-    .replace(/^\s*\d+\.\s+/gm, "")            // numbered lists
-    .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")  // markdown links
-    .replace(/https?:\/\/\S+/g, "")           // bare URLs
-    .replace(/\n{2,}/g, ". ")                 // paragraph breaks → pause
-    .replace(/\n/g, " ")                       // line breaks → space
-    .replace(/\s{2,}/g, " ")                  // collapse spaces
-    .trim();
-}
+/* ══════════════════════════════════════════════════════════════════════════
+   Constants
+══════════════════════════════════════════════════════════════════════════ */
 
-function getSR(): SRCtor | null {
-  if (typeof window === "undefined") return null;
-  return window.SpeechRecognition ?? window.webkitSpeechRecognition ?? null;
-}
+const WAKE_WORDS = ["jarvis", "olá jarvis", "ola jarvis", "hey jarvis", "ei jarvis"];
 
-function pickVoice(): SpeechSynthesisVoice | null {
-  const all = window.speechSynthesis.getVoices();
-  const try_ = (fn: (v: SpeechSynthesisVoice) => boolean) => all.find(fn) ?? null;
-  return (
-    try_(v => /daniel/i.test(v.name)  && v.lang.startsWith("pt"))          ||
-    try_(v => /ricardo/i.test(v.name) && v.lang.startsWith("pt"))          ||
-    try_(v => /antonio|antônio/i.test(v.name) && v.lang.startsWith("pt"))  ||
-    try_(v => /eddy/i.test(v.name)    && v.lang.startsWith("pt"))          ||
-    try_(v => /reed/i.test(v.name)    && v.lang.startsWith("pt"))          ||
-    try_(v => /thomas|tomás/i.test(v.name) && v.lang.startsWith("pt"))     ||
-    try_(v => /luca/i.test(v.name)    && v.lang.startsWith("pt"))          ||
-    try_(v => v.lang === "pt-BR" && !v.localService)                       ||
-    try_(v => v.lang === "pt-BR")                                           ||
-    try_(v => v.lang.startsWith("pt"))                                      ||
-    null
-  );
-}
+const TAG = {
+  SPOTIFY:  /\[SPOTIFY:(\{[\s\S]*?\})\]\s*/,
+  CALENDAR: /\[CALENDAR:(\{[\s\S]*?\})\]\s*/,
+  WHATSAPP: /\[WHATSAPP:(\{[\s\S]*?\})\]\s*/,
+  GITHUB:   /\[GITHUB:(\{[\s\S]*?\})\]\s*/,
+  GMAIL:    /\[GMAIL:(\{[\s\S]*?\})\]\s*/,
+  TIMER:    /\[TIMER:(\{[\s\S]*?\})\]\s*/,
+  MEMORY:   /\[MEMORY:(\{[\s\S]*?\})\]\s*/,
+  BRIEFING: /\[BRIEFING:(\{[\s\S]*?\})\]\s*/,
+};
+
+/* ══════════════════════════════════════════════════════════════════════════
+   Pure helpers
+══════════════════════════════════════════════════════════════════════════ */
 
 function parseTag<T>(reply: string, re: RegExp): { action: T | null; text: string } {
   const m = reply.match(re);
   if (!m) return { action: null, text: reply };
-  try { return { action: JSON.parse(m[1]) as T, text: reply.replace(m[0], "").trim() }; }
+  try   { return { action: JSON.parse(m[1]) as T, text: reply.replace(m[0], "").trim() }; }
   catch { return { action: null, text: reply }; }
+}
+
+function sanitize(text: string): string {
+  return text
+    .replace(/```[\s\S]*?```/g, "")
+    .replace(/`[^`\n]+`/g, "")
+    .replace(/^\s*#{1,6}\s+/gm, "")
+    .replace(/\*\*([^*]+)\*\*/g, "$1")
+    .replace(/\*([^*\n]+)\*/g, "$1")
+    .replace(/^\s*[-*+]\s+/gm, "")
+    .replace(/^\s*\d+\.\s+/gm, "")
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
+    .replace(/https?:\/\/\S+/g, "")
+    .replace(/\n{2,}/g, ". ")
+    .replace(/\n/g, " ")
+    .replace(/\s{2,}/g, " ")
+    .trim();
 }
 
 function formatTime(secs: number): string {
@@ -111,32 +102,65 @@ function formatTime(secs: number): string {
   return `${m}:${s}`;
 }
 
-/* ── Component ───────────────────────────────────────────────────────────── */
+function getSR(): SRCtor | null {
+  if (typeof window === "undefined") return null;
+  return window.SpeechRecognition ?? window.webkitSpeechRecognition ?? null;
+}
+
+function pickVoice(): SpeechSynthesisVoice | null {
+  const voices = window.speechSynthesis.getVoices();
+  const find   = (fn: (v: SpeechSynthesisVoice) => boolean) => voices.find(fn) ?? null;
+  return (
+    find(v => /daniel/i.test(v.name)          && v.lang.startsWith("pt")) ||
+    find(v => /ricardo/i.test(v.name)         && v.lang.startsWith("pt")) ||
+    find(v => /antonio|antônio/i.test(v.name) && v.lang.startsWith("pt")) ||
+    find(v => /eddy/i.test(v.name)            && v.lang.startsWith("pt")) ||
+    find(v => /reed/i.test(v.name)            && v.lang.startsWith("pt")) ||
+    find(v => /thomas|tomás/i.test(v.name)    && v.lang.startsWith("pt")) ||
+    find(v => /luca/i.test(v.name)            && v.lang.startsWith("pt")) ||
+    find(v => v.lang === "pt-BR" && !v.localService)                      ||
+    find(v => v.lang === "pt-BR")                                          ||
+    find(v => v.lang.startsWith("pt"))                                     ||
+    null
+  );
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   Component
+══════════════════════════════════════════════════════════════════════════ */
+
 export default function JarvisPage() {
+
+  /* ── State ───────────────────────────────────────────────────────────── */
+
   const [orbState,     setOrbState]     = useState<OrbState>("wake");
   const [caption,      setCaption]      = useState("");
   const [timerDisplay, setTimerDisplay] = useState<{ label: string; timeLeft: number } | null>(null);
 
-  const mode        = useRef<Mode>("idle");
-  const history     = useRef<Msg[]>([]);
-  const wakeRec     = useRef<SR | null>(null);
-  const activeRec   = useRef<SR | null>(null);
-  const timer       = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const deviceId    = useRef<string | null>(null);
-  const started     = useRef(false);
-  const audioRef    = useRef<HTMLAudioElement | null>(null);
+  const mode           = useRef<Mode>("idle");
+  const history        = useRef<Msg[]>([]);
+  const wakeRec        = useRef<SR | null>(null);
+  const activeRec      = useRef<SR | null>(null);
+  const restartTimer   = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const deviceId       = useRef<string | null>(null);
+  const started        = useRef(false);
+  const audioRef       = useRef<HTMLAudioElement | null>(null);
+  const timerInterval  = useRef<ReturnType<typeof setInterval> | null>(null);
+  const timerSecsLeft  = useRef(0);
+  const timerLabel     = useRef("");
 
-  // Timer state
-  const timerInterval = useRef<ReturnType<typeof setInterval> | null>(null);
-  const timerSecsLeft = useRef<number>(0);
-  const timerLabel    = useRef<string>("");
+  /* ── Lifecycle: auth + SDK init on mount ─────────────────────────────── */
 
-  /* ── Spotify + Google Calendar auth on mount ─────────────────────────── */
   useEffect(() => {
-    const p = new URLSearchParams(window.location.search);
-    if (p.get("spotify") === "ok")  { window.history.replaceState({}, "", "/"); initSpotifySDK(); return; }
-    if (p.get("calendar") === "ok") { window.history.replaceState({}, "", "/"); }
-
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("spotify") === "ok") {
+      window.history.replaceState({}, "", "/");
+      initSpotifySDK();
+      return;
+    }
+    if (params.get("calendar") === "ok") {
+      window.history.replaceState({}, "", "/");
+    }
     fetch("/api/spotify/status")
       .then(r => r.json())
       .then(d => { if (d.connected) initSpotifySDK(); })
@@ -144,12 +168,29 @@ export default function JarvisPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  /* ── Lifecycle: keepalive + cleanup ──────────────────────────────────── */
+
+  useEffect(() => {
+    const ka = setInterval(() => {
+      const s = window.speechSynthesis;
+      if (s?.speaking) { s.pause(); s.resume(); }
+    }, 10_000);
+    return () => {
+      clearInterval(ka);
+      stopCountdown();
+      stopAll();
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   /* ── Spotify Web Playback SDK ────────────────────────────────────────── */
+
   function initSpotifySDK() {
     if (window.Spotify) { createSpotifyPlayer(); return; }
-    const s = document.createElement("script");
-    s.src = "https://sdk.scdn.co/spotify-player.js"; s.async = true;
-    document.head.appendChild(s);
+    const script   = document.createElement("script");
+    script.src     = "https://sdk.scdn.co/spotify-player.js";
+    script.async   = true;
+    document.head.appendChild(script);
     window.onSpotifyWebPlaybackSDKReady = createSpotifyPlayer;
   }
 
@@ -158,18 +199,22 @@ export default function JarvisPage() {
     if (!SDK) return;
     const player = new SDK.Player({
       name: "Jarvis",
-      getOAuthToken: (cb: (t: string) => void) => {
-        fetch("/api/spotify/token").then(r => r.json()).then(d => { if (d.token) cb(d.token); }).catch(() => {});
+      getOAuthToken: (cb) => {
+        fetch("/api/spotify/token")
+          .then(r => r.json())
+          .then(d => { if (d.token) cb(d.token); })
+          .catch(() => {});
       },
       volume: 0.8,
     });
-    player.addListener("ready",     ({ device_id }: { device_id: string }) => { deviceId.current = device_id; });
-    player.addListener("not_ready", () => { deviceId.current = null; });
-    player.addListener("account_error", () => { console.warn("[Jarvis] Spotify Premium necessário."); });
+    player.addListener("ready",         ({ device_id }) => { deviceId.current = device_id; });
+    player.addListener("not_ready",     ()              => { deviceId.current = null; });
+    player.addListener("account_error", ()              => { console.warn("[Jarvis] Spotify Premium necessário."); });
     player.connect();
   }
 
-  /* ── helpers ──────────────────────────────────────────────────────────── */
+  /* ── Mode & stop helpers ─────────────────────────────────────────────── */
+
   function setMode(m: Mode) {
     mode.current = m;
     setOrbState(
@@ -178,21 +223,27 @@ export default function JarvisPage() {
       m === "listening" ? "listening" : "wake"
     );
   }
-  function clearTimer() { if (timer.current) { clearTimeout(timer.current); timer.current = null; } }
+
+  function clearRestartTimer() {
+    if (restartTimer.current) { clearTimeout(restartTimer.current); restartTimer.current = null; }
+  }
+
   function stopAll() {
-    clearTimer();
+    clearRestartTimer();
     try { wakeRec.current?.abort();   } catch { /* ok */ }
     try { activeRec.current?.abort(); } catch { /* ok */ }
-    wakeRec.current = null; activeRec.current = null;
+    wakeRec.current = null;
+    activeRec.current = null;
     window.speechSynthesis?.cancel();
     if (audioRef.current) { audioRef.current.pause(); audioRef.current.src = ""; audioRef.current = null; }
   }
 
-  /* ── Timer ────────────────────────────────────────────────────────────── */
-  function startTimer(minutes: number, label: string) {
-    stopTimerInterval();
+  /* ── Countdown timer ─────────────────────────────────────────────────── */
+
+  function startCountdown(minutes: number, label: string) {
+    stopCountdown();
     timerSecsLeft.current = minutes * 60;
-    timerLabel.current = label;
+    timerLabel.current    = label;
     setTimerDisplay({ label, timeLeft: timerSecsLeft.current });
 
     if ("Notification" in window && Notification.permission === "default") {
@@ -203,222 +254,245 @@ export default function JarvisPage() {
       timerSecsLeft.current -= 1;
       setTimerDisplay({ label: timerLabel.current, timeLeft: timerSecsLeft.current });
       if (timerSecsLeft.current <= 0) {
-        stopTimerInterval();
+        stopCountdown();
         setTimerDisplay(null);
-        onTimerEnd(timerLabel.current);
+        onCountdownEnd(timerLabel.current);
       }
     }, 1000);
   }
 
-  function stopTimerInterval() {
+  function stopCountdown() {
     if (timerInterval.current) { clearInterval(timerInterval.current); timerInterval.current = null; }
   }
 
-  function onTimerEnd(label: string) {
+  function onCountdownEnd(label: string) {
     if ("Notification" in window && Notification.permission === "granted") {
       new Notification("Jarvis", { body: `${label} finalizado!`, icon: "/favicon.ico" });
     }
-    const msg = label.toLowerCase().includes("pomodoro")
-      ? "Pomodoro finalizado! Hora de uma pausa merecida."
-      : label.toLowerCase().includes("pausa")
-        ? "Pausa encerrada. Bora voltar ao foco!"
-        : `${label} finalizado!`;
+    const lower = label.toLowerCase();
+    const msg   =
+      lower.includes("pomodoro") ? "Pomodoro finalizado! Hora de uma pausa merecida." :
+      lower.includes("pausa")    ? "Pausa encerrada. Bora voltar ao foco!"            :
+      `${label} finalizado!`;
     speak(msg, () => { setMode("wake"); startWake(); });
   }
 
-  function getTimerStatus(): string {
+  function getCountdownStatus(): string {
     if (!timerInterval.current || timerSecsLeft.current <= 0) return "Não há nenhum timer ativo no momento.";
     return `Faltam ${formatTime(timerSecsLeft.current)} para o ${timerLabel.current}.`;
   }
 
-  /* ── TTS ──────────────────────────────────────────────────────────────── */
+  /* ── TTS: ElevenLabs with MediaSource streaming, synth fallback ──────── */
+
   function speak(text: string, onDone: () => void) {
     if (audioRef.current) { audioRef.current.pause(); audioRef.current.src = ""; audioRef.current = null; }
     window.speechSynthesis?.cancel();
     setMode("speaking");
     setCaption(text);
 
-    const fallbackSynth = () => {
+    const done = () => { setCaption(""); onDone(); };
+
+    const synthFallback = () => {
       const synth = window.speechSynthesis;
-      if (!synth) { setCaption(""); onDone(); return; }
-      const u = new SpeechSynthesisUtterance(text);
-      const v = pickVoice();
+      if (!synth) { done(); return; }
+      const u   = new SpeechSynthesisUtterance(text);
+      const v   = pickVoice();
       if (v) { u.voice = v; u.lang = v.lang; } else { u.lang = "pt-BR"; }
-      u.rate = 0.93; u.pitch = 0.78; u.volume = 1;
-      u.onend   = () => { setCaption(""); onDone(); };
-      u.onerror = () => { setCaption(""); onDone(); };
+      u.rate    = 0.93; u.pitch = 0.78; u.volume = 1;
+      u.onend   = done;
+      u.onerror = done;
       synth.speak(u);
     };
 
-    fetch("/api/tts", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text }) })
+    fetch("/api/tts", {
+      method:  "POST",
+      headers: { "Content-Type": "application/json" },
+      body:    JSON.stringify({ text }),
+    })
       .then(res => {
         if (!res.ok || !res.body) throw new Error("TTS falhou");
 
-        // Progressive streaming via MediaSource (Chrome/Edge/Firefox)
         const supportsMS =
           typeof MediaSource !== "undefined" &&
           MediaSource.isTypeSupported("audio/mpeg");
 
         if (supportsMS) {
-          const ms  = new MediaSource();
-          const url = URL.createObjectURL(ms);
+          const ms    = new MediaSource();
+          const url   = URL.createObjectURL(ms);
           const audio = new Audio(url);
           audioRef.current = audio;
 
-          const cleanup = () => { URL.revokeObjectURL(url); audioRef.current = null; setCaption(""); onDone(); };
+          const cleanup = () => { URL.revokeObjectURL(url); audioRef.current = null; done(); };
           audio.onended = cleanup;
           audio.onerror = cleanup;
 
           ms.addEventListener("sourceopen", async () => {
             let sb: SourceBuffer;
-            try { sb = ms.addSourceBuffer("audio/mpeg"); }
+            try   { sb = ms.addSourceBuffer("audio/mpeg"); }
             catch { cleanup(); return; }
 
-            const reader = res.body!.getReader();
-            let started = false;
-
+            const reader     = res.body!.getReader();
             const waitUpdate = () =>
               new Promise<void>(r => sb.addEventListener("updateend", () => r(), { once: true }));
 
+            let playing = false;
             try {
               for (;;) {
-                const { done, value } = await reader.read();
-                if (done) {
+                const { done: streamDone, value } = await reader.read();
+                if (streamDone) {
                   if (sb.updating) await waitUpdate();
                   if (ms.readyState === "open") ms.endOfStream();
                   return;
                 }
                 if (sb.updating) await waitUpdate();
                 sb.appendBuffer(value);
-                if (!started) { started = true; audio.play().catch(() => {}); }
+                if (!playing) { playing = true; audio.play().catch(() => {}); }
               }
             } catch { cleanup(); }
           });
 
         } else {
-          // Fallback: blob (Safari)
-          res.blob().then(blob => {
-            const url = URL.createObjectURL(blob);
-            const audio = new Audio(url);
-            audioRef.current = audio;
-            audio.onended = () => { URL.revokeObjectURL(url); audioRef.current = null; setCaption(""); onDone(); };
-            audio.onerror = () => { URL.revokeObjectURL(url); audioRef.current = null; setCaption(""); onDone(); };
-            audio.play().catch(() => { setCaption(""); onDone(); });
-          }).catch(fallbackSynth);
+          res.blob()
+            .then(blob => {
+              const url   = URL.createObjectURL(blob);
+              const audio = new Audio(url);
+              audioRef.current  = audio;
+              const cleanup = () => { URL.revokeObjectURL(url); audioRef.current = null; done(); };
+              audio.onended = cleanup;
+              audio.onerror = cleanup;
+              audio.play().catch(done);
+            })
+            .catch(synthFallback);
         }
       })
-      .catch(fallbackSynth);
+      .catch(synthFallback);
   }
 
+  /* ── Spotify deep-link + playback polling ────────────────────────────── */
+
   function openSpotifyUri(uri: string) {
-    // Open Spotify app via deep link (anchor click is most reliable cross-browser)
-    const a = document.createElement("a");
-    a.href = uri;
+    const a       = document.createElement("a");
+    a.href        = uri;
     a.style.cssText = "position:fixed;width:0;height:0;opacity:0;pointer-events:none;";
     document.body.appendChild(a);
     a.click();
     setTimeout(() => { try { a.remove(); } catch { /* ok */ } }, 500);
 
-    // Poll until Spotify is up, then force play via API (up to 10s)
     let attempts = 0;
-    const poll = setInterval(async () => {
-      attempts++;
-      if (attempts > 10) { clearInterval(poll); return; }
+    const poll   = setInterval(async () => {
+      if (++attempts > 10) { clearInterval(poll); return; }
       try {
-        const res = await fetch("/api/spotify/command", {
-          method: "POST",
+        const res  = await fetch("/api/spotify/command", {
+          method:  "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ action: "play_uri", uri }),
+          body:    JSON.stringify({ action: "play_uri", uri }),
         });
-        const d = await res.json();
-        if (d.ok) clearInterval(poll);
+        const data = await res.json();
+        if (data.ok) clearInterval(poll);
       } catch { /* retry */ }
     }, 1000);
   }
 
-  /* ── Executors ────────────────────────────────────────────────────────── */
+  /* ══════════════════════════════════════════════════════════════════════
+     Action executors
+  ══════════════════════════════════════════════════════════════════════ */
+
   async function execSpotify(action: SpotifyAction): Promise<string> {
     try {
       const res = await fetch("/api/spotify/command", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...action, device_id: deviceId.current }),
+        method:  "POST",
+        headers: { "Content-Type": "application/json" },
+        body:    JSON.stringify({ ...action, device_id: deviceId.current }),
       });
-      if (res.status === 401) { window.location.href = "/api/spotify/login"; return "Redirecionando para autenticar o Spotify."; }
-      const d = await res.json();
-      if (d.error) return d.error;
-      if (action.action === "current") {
-        return d.playing ? `Tocando ${d.track} de ${d.artist}.` : "Nada tocando no momento.";
+      if (res.status === 401) {
+        window.location.href = "/api/spotify/login";
+        return "Redirecionando para autenticar o Spotify.";
       }
-      if (d.spotifyUri) openSpotifyUri(d.spotifyUri);
-      // Short affirmative — no need to repeat what the user asked
-      if (action.action === "play")     return d.track ? `${d.track}.` : "Pronto.";
-      if (action.action === "pause")    return "Pausado.";
-      if (action.action === "resume")   return "Continuando.";
-      if (action.action === "next")     return "Ok.";
-      if (action.action === "previous") return "Ok.";
-      if (action.action === "volume")   return "Feito.";
-      if (action.action === "shuffle")  return "Aleatório ativado.";
-      return "Pronto.";
+      const data = await res.json();
+      if (data.error) return data.error;
+      if (action.action === "current") {
+        return data.playing ? `Tocando ${data.track} de ${data.artist}.` : "Nada tocando no momento.";
+      }
+      if (data.spotifyUri) openSpotifyUri(data.spotifyUri);
+      switch (action.action) {
+        case "play":     return data.track ? `${data.track}.` : "Pronto.";
+        case "pause":    return "Pausado.";
+        case "resume":   return "Continuando.";
+        case "next":     return "Ok.";
+        case "previous": return "Ok.";
+        case "volume":   return "Feito.";
+        case "shuffle":  return "Aleatório ativado.";
+        default:         return "Pronto.";
+      }
     } catch { return "Erro ao conectar com o Spotify."; }
   }
 
   async function execCalendar(action: CalendarAction): Promise<string> {
     try {
       const res = await fetch("/api/calendar/command", {
-        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(action),
+        method:  "POST",
+        headers: { "Content-Type": "application/json" },
+        body:    JSON.stringify(action),
       });
-      if (res.status === 401) { window.location.href = "/api/calendar/login"; return "Redirecionando para o Google Calendar."; }
-      const d = await res.json();
-      if (action.action === "create") {
-        if (d.error) return d.error;
-        if (d.ok) {
-          const dt = new Date(d.start);
-          const dateStr = dt.toLocaleDateString("pt-BR", { weekday: "long", day: "numeric", month: "long" });
-          const timeStr = dt.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
-          return `Evento "${d.title}" criado para ${dateStr} às ${timeStr}.`;
-        }
+      if (res.status === 401) {
+        window.location.href = "/api/calendar/login";
+        return "Redirecionando para o Google Calendar.";
+      }
+      const data = await res.json();
+      if (data.error) return data.error;
+
+      if (action.action === "create" && data.ok) {
+        const dt      = new Date(data.start);
+        const dateStr = dt.toLocaleDateString("pt-BR", { weekday: "long", day: "numeric", month: "long" });
+        const timeStr = dt.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
+        return `Evento "${data.title}" criado para ${dateStr} às ${timeStr}.`;
       }
       if (action.action === "list") {
-        if (d.error) return d.error;
-        if (!d.events?.length) return "Você não tem eventos próximos na agenda.";
-        const list = d.events.map((e: { title: string; start: string }) => {
-          const raw = e.start.replace(/([+-]\d{2}:\d{2}|Z)$/, "");
-          const dt  = new Date(raw);
+        if (!data.events?.length) return "Você não tem eventos próximos na agenda.";
+        const list = data.events.map((e: { title: string; start: string }) => {
+          const dt = new Date(e.start.replace(/([+-]\d{2}:\d{2}|Z)$/, ""));
           return `${e.title} — ${dt.toLocaleDateString("pt-BR", { weekday: "long", day: "numeric", month: "long" })} às ${dt.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })}`;
         }).join(". ");
         return `Seus próximos eventos: ${list}.`;
       }
-      return d.error ?? "Pronto.";
+      return "Pronto.";
     } catch { return "Erro ao conectar com o Google Calendar."; }
   }
 
   async function execWhatsApp(action: WhatsAppAction): Promise<string> {
     try {
-      const res = await fetch("/api/whatsapp/command", {
-        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(action),
+      const res  = await fetch("/api/whatsapp/command", {
+        method:  "POST",
+        headers: { "Content-Type": "application/json" },
+        body:    JSON.stringify(action),
       });
-      const d = await res.json();
-      if (d.error) return d.error;
-      return d.ok ? "Mensagem enviada com sucesso." : "Não consegui enviar a mensagem.";
+      const data = await res.json();
+      if (data.error) return data.error;
+      return data.ok ? "Mensagem enviada com sucesso." : "Não consegui enviar a mensagem.";
     } catch { return "Serviço WhatsApp não disponível."; }
   }
 
-  async function execGmail(_action: GmailAction): Promise<string> {
+  async function execGmail(): Promise<string> {
     try {
       const res = await fetch("/api/gmail/summary");
-      if (res.status === 401) { window.location.href = "/api/calendar/login"; return "Redirecionando para autorizar."; }
-      const d = await res.json();
-      return d.summary ?? d.error ?? "Não consegui verificar os emails.";
+      if (res.status === 401) {
+        window.location.href = "/api/calendar/login";
+        return "Redirecionando para autorizar.";
+      }
+      const data = await res.json();
+      return data.summary ?? data.error ?? "Não consegui verificar os emails.";
     } catch { return "Erro ao acessar o Gmail."; }
   }
 
   async function execGithub(action: GithubAction): Promise<string> {
     try {
-      const res = await fetch("/api/github/command", {
-        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(action),
+      const res  = await fetch("/api/github/command", {
+        method:  "POST",
+        headers: { "Content-Type": "application/json" },
+        body:    JSON.stringify(action),
       });
-      const d = await res.json();
-      return d.summary ?? d.error ?? "Não consegui buscar os dados do GitHub.";
+      const data = await res.json();
+      return data.summary ?? data.error ?? "Não consegui buscar os dados do GitHub.";
     } catch { return "Erro ao conectar com o GitHub."; }
   }
 
@@ -426,11 +500,15 @@ export default function JarvisPage() {
     if (action.action === "start") {
       const mins  = action.minutes ?? 25;
       const label = action.label   ?? "Timer";
-      startTimer(mins, label);
+      startCountdown(mins, label);
       return `${label} de ${mins} minuto${mins > 1 ? "s" : ""} iniciado. Vou te avisar quando terminar.`;
     }
-    if (action.action === "cancel") { stopTimerInterval(); setTimerDisplay(null); return "Timer cancelado."; }
-    if (action.action === "status") return getTimerStatus();
+    if (action.action === "cancel") {
+      stopCountdown();
+      setTimerDisplay(null);
+      return "Timer cancelado.";
+    }
+    if (action.action === "status") return getCountdownStatus();
     return "Não entendi o comando do timer.";
   }
 
@@ -441,54 +519,78 @@ export default function JarvisPage() {
         window.location.href = "/api/calendar/login";
         return "Redirecionando para autorizar o Google.";
       }
-      const d = await res.json();
-      return d.briefing ?? d.error ?? "Não consegui montar o briefing agora.";
+      const data = await res.json();
+      return data.briefing ?? data.error ?? "Não consegui montar o briefing agora.";
     } catch { return "Erro ao buscar o briefing."; }
   }
 
-  async function execMemory(action: MemoryAction, fallbackText: string): Promise<string> {
+  async function execMemory(action: MemoryAction, fallback: string): Promise<string> {
     try {
-      const res = await fetch("/api/memory/command", {
-        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(action),
+      const res  = await fetch("/api/memory/command", {
+        method:  "POST",
+        headers: { "Content-Type": "application/json" },
+        body:    JSON.stringify(action),
       });
-      const d = await res.json();
-      if (action.action === "save") return d.ok ? (fallbackText || "Anotado, não vou esquecer.") : fallbackText;
+      const data = await res.json();
+      if (action.action === "save") return data.ok ? (fallback || "Anotado, não vou esquecer.") : fallback;
       if (action.action === "list") {
-        if (!d.memories?.length) return "Ainda não tenho nada guardado sobre você.";
-        const list = d.memories.map((m: { category: string; content: string }) => `${m.content}`).join(". ");
+        if (!data.memories?.length) return "Ainda não tenho nada guardado sobre você.";
+        const list = data.memories
+          .map((m: { content: string }) => m.content)
+          .join(". ");
         return `Aqui está o que eu sei sobre você: ${list}.`;
       }
-      return fallbackText || "Pronto.";
-    } catch { return fallbackText || "Erro ao acessar a memória."; }
+      return fallback || "Pronto.";
+    } catch { return fallback || "Erro ao acessar a memória."; }
   }
 
-  /* ── Active listener ──────────────────────────────────────────────────── */
+  /* ── MiniPlayer handler (fire-and-forget, no voice feedback) ─────────── */
+
+  function handleSpotifyCommand(action: string) {
+    execSpotify({ action }).catch(() => {});
+  }
+
+  /* ══════════════════════════════════════════════════════════════════════
+     Speech recognition
+  ══════════════════════════════════════════════════════════════════════ */
+
   function startActive(timeoutMs = 12000) {
     const API = getSR();
     if (!API) return;
     setMode("listening");
     try { activeRec.current?.abort(); } catch { /* ok */ }
-    const rec = new API();
-    activeRec.current = rec;
-    rec.lang = "pt-BR"; rec.interimResults = true; rec.continuous = true; rec.maxAlternatives = 1;
 
-    let captured = false;
-    let finalSegments = "";
-    let lastFullText = "";
+    const rec = new API();
+    activeRec.current           = rec;
+    rec.lang                    = "pt-BR";
+    rec.interimResults          = true;
+    rec.continuous              = true;
+    rec.maxAlternatives         = 1;
+
+    let captured       = false;
+    let finalSegments  = "";
+    let lastFullText   = "";
     let debounceTimer: ReturnType<typeof setTimeout> | null = null;
-    let hardTimeout: ReturnType<typeof setTimeout>;
+    let hardTimeout:   ReturnType<typeof setTimeout>;
 
     const doSubmit = (text: string) => {
       if (captured) return;
       const t = text.trim();
       if (t.length < 2) return;
       const lower = t.toLowerCase();
-      if (WAKE.some(w => lower === w || lower === w + ".")) return;
+      if (WAKE_WORDS.some(w => lower === w || lower === w + ".")) return;
       captured = true;
       if (debounceTimer) { clearTimeout(debounceTimer); debounceTimer = null; }
       clearTimeout(hardTimeout);
       try { rec.abort(); } catch { /* ok */ }
       sendToJarvis(t);
+    };
+
+    const fallback = () => {
+      if (captured) return;
+      const text = lastFullText || finalSegments;
+      if (text.trim().length >= 2) doSubmit(text);
+      else { setMode("wake"); startWake(); }
     };
 
     rec.onresult = (e) => {
@@ -497,7 +599,7 @@ export default function JarvisPage() {
         const seg = e.results[i][0].transcript;
         if (e.results[i].isFinal) {
           finalSegments += seg + " ";
-          full = finalSegments;
+          full           = finalSegments;
         } else {
           full = finalSegments + seg;
         }
@@ -507,13 +609,6 @@ export default function JarvisPage() {
       lastFullText = full;
       if (debounceTimer) clearTimeout(debounceTimer);
       debounceTimer = setTimeout(() => doSubmit(full), 1200);
-    };
-
-    const fallback = () => {
-      if (captured) return;
-      const text = lastFullText || finalSegments;
-      if (text.trim().length >= 2) doSubmit(text);
-      else { setMode("wake"); startWake(); }
     };
 
     rec.onerror = () => {
@@ -538,50 +633,58 @@ export default function JarvisPage() {
     try { rec.start(); } catch { setMode("wake"); startWake(); }
   }
 
-  /* ── Wake word listener ───────────────────────────────────────────────── */
   function startWake() {
-    clearTimer();
+    clearRestartTimer();
     if (mode.current !== "wake") return;
     const API = getSR();
     if (!API) return;
     try { wakeRec.current?.abort(); } catch { /* ok */ }
     wakeRec.current = null;
+
     const rec = new API();
-    wakeRec.current = rec;
-    rec.lang = "pt-BR"; rec.interimResults = true; rec.continuous = true; rec.maxAlternatives = 1;
+    wakeRec.current             = rec;
+    rec.lang                    = "pt-BR";
+    rec.interimResults          = true;
+    rec.continuous              = true;
+    rec.maxAlternatives         = 1;
+
     rec.onresult = (e) => {
       for (let i = e.resultIndex; i < e.results.length; i++) {
         const t = e.results[i][0].transcript.toLowerCase().trim();
-        if (WAKE.some(w => t.includes(w))) {
+        if (WAKE_WORDS.some(w => t.includes(w))) {
           try { rec.abort(); } catch { /* ok */ }
           wakeRec.current = null;
-          clearTimer();
-          timer.current = setTimeout(startActive, 150);
+          clearRestartTimer();
+          restartTimer.current = setTimeout(startActive, 150);
           return;
         }
       }
     };
-    rec.onerror = () => { if (mode.current === "wake") timer.current = setTimeout(startWake, 800); };
-    rec.onend   = () => { if (mode.current === "wake") timer.current = setTimeout(startWake, 400); };
+    rec.onerror = () => { if (mode.current === "wake") restartTimer.current = setTimeout(startWake, 800); };
+    rec.onend   = () => { if (mode.current === "wake") restartTimer.current = setTimeout(startWake, 400); };
+
     try {
       rec.start();
     } catch {
-      // rec.start() can throw if mic is busy — retry after a second
       wakeRec.current = null;
-      if (mode.current === "wake") timer.current = setTimeout(startWake, 1000);
+      if (mode.current === "wake") restartTimer.current = setTimeout(startWake, 1000);
     }
   }
 
-  /* ── Main chat handler ────────────────────────────────────────────────── */
+  /* ══════════════════════════════════════════════════════════════════════
+     Main chat dispatcher
+  ══════════════════════════════════════════════════════════════════════ */
+
   async function sendToJarvis(text: string) {
     setMode("thinking");
     const msgs: Msg[] = [...history.current, { role: "user", content: text }];
-    history.current = msgs;
+    history.current   = msgs;
 
     try {
       const res  = await fetch("/api/chat", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ messages: msgs.slice(-20) }),
+        method:  "POST",
+        headers: { "Content-Type": "application/json" },
+        body:    JSON.stringify({ messages: msgs.slice(-20) }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
@@ -589,44 +692,35 @@ export default function JarvisPage() {
       const rawReply = data.reply as string;
       history.current = [...msgs, { role: "assistant", content: rawReply }];
 
-      const spotify  = parseTag<SpotifyAction>(rawReply,  SPOTIFY_TAG_RE);
-      const calendar = parseTag<CalendarAction>(rawReply, CALENDAR_TAG_RE);
-      const whatsapp = parseTag<WhatsAppAction>(rawReply, WHATSAPP_TAG_RE);
-      const github   = parseTag<GithubAction>(rawReply,   GITHUB_TAG_RE);
-      const gmail    = parseTag<GmailAction>(rawReply,    GMAIL_TAG_RE);
-      const timerTag = parseTag<TimerAction>(rawReply,    TIMER_TAG_RE);
-      const memory   = parseTag<MemoryAction>(rawReply,   MEMORY_TAG_RE);
-      const briefing = parseTag<BriefingAction>(rawReply, BRIEFING_TAG_RE);
-
       const done = () => { setMode("wake"); setTimeout(startWake, 300); };
+      const say  = (t: string) => speak(sanitize(t), done);
 
-      const say = (t: string) => speak(sanitize(t), done);
+      const spotify  = parseTag<SpotifyAction>(rawReply,  TAG.SPOTIFY);
+      const calendar = parseTag<CalendarAction>(rawReply, TAG.CALENDAR);
+      const whatsapp = parseTag<WhatsAppAction>(rawReply, TAG.WHATSAPP);
+      const github   = parseTag<GithubAction>(rawReply,   TAG.GITHUB);
+      const gmail    = parseTag<SpotifyAction>(rawReply,  TAG.GMAIL);
+      const timer    = parseTag<TimerAction>(rawReply,    TAG.TIMER);
+      const memory   = parseTag<MemoryAction>(rawReply,   TAG.MEMORY);
+      const briefing = parseTag<SpotifyAction>(rawReply,  TAG.BRIEFING);
 
-      if (spotify.action) {
-        say(await execSpotify(spotify.action));
-      } else if (calendar.action) {
-        say(await execCalendar(calendar.action));
-      } else if (whatsapp.action) {
-        say(await execWhatsApp(whatsapp.action));
-      } else if (github.action) {
-        say(await execGithub(github.action));
-      } else if (gmail.action) {
-        say(await execGmail(gmail.action));
-      } else if (timerTag.action) {
-        say(execTimer(timerTag.action));
-      } else if (memory.action) {
-        say(await execMemory(memory.action, memory.text));
-      } else if (briefing.action) {
-        say(await execBriefing());
-      } else {
-        say(rawReply);
-      }
+      if      (spotify.action)  say(await execSpotify(spotify.action));
+      else if (calendar.action) say(await execCalendar(calendar.action));
+      else if (whatsapp.action) say(await execWhatsApp(whatsapp.action));
+      else if (github.action)   say(await execGithub(github.action));
+      else if (gmail.action)    say(await execGmail());
+      else if (timer.action)    say(execTimer(timer.action));
+      else if (memory.action)   say(await execMemory(memory.action, memory.text));
+      else if (briefing.action) say(await execBriefing());
+      else                      say(rawReply);
+
     } catch {
       speak("Desculpe, houve um erro na comunicação.", () => { setMode("wake"); startWake(); });
     }
   }
 
-  /* ── Click handler ────────────────────────────────────────────────────── */
+  /* ── Click / tap handler ─────────────────────────────────────────────── */
+
   function handleClick() {
     if (!started.current) {
       started.current = true;
@@ -642,53 +736,55 @@ export default function JarvisPage() {
       startWake();
       return;
     }
+
     const m = mode.current;
     if (m === "thinking") return;
+
     if (m === "speaking") {
       window.speechSynthesis?.cancel();
       if (audioRef.current) { audioRef.current.pause(); audioRef.current.src = ""; audioRef.current = null; }
-      setCaption(""); setMode("wake"); startWake(); return;
+      setCaption("");
+      setMode("wake");
+      startWake();
+      return;
     }
+
     if (m === "listening") {
       try { activeRec.current?.abort(); } catch { /* ok */ }
-      setMode("wake"); startWake(); return;
+      setMode("wake");
+      startWake();
+      return;
     }
+
     try { wakeRec.current?.abort(); } catch { /* ok */ }
     wakeRec.current = null;
-    clearTimer();
-    timer.current = setTimeout(startActive, 150);
+    clearRestartTimer();
+    restartTimer.current = setTimeout(startActive, 150);
   }
 
-  /* ── Keepalive + cleanup ──────────────────────────────────────────────── */
-  useEffect(() => {
-    const ka = setInterval(() => {
-      const s = window.speechSynthesis;
-      if (s?.speaking) { s.pause(); s.resume(); }
-    }, 10_000);
-    return () => { clearInterval(ka); stopTimerInterval(); stopAll(); };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  /* ── Render ──────────────────────────────────────────────────────────── */
 
-  /* ── Render ───────────────────────────────────────────────────────────── */
   return (
-    <main style={{ position: "fixed", inset: 0, background: "#000000" }}>
+    <main style={{ position: "fixed", inset: 0, background: "#000" }}>
       <Orb state={orbState} onClick={handleClick} />
 
-      {/* Status badge */}
+      <MiniPlayer onCommand={handleSpotifyCommand} />
+
+      {/* Status badge — top left */}
       <div style={{
         position: "fixed", top: 18, left: 22, zIndex: 10,
         color: "rgba(255,255,255,0.18)",
-        fontSize: 11, fontFamily: "monospace", letterSpacing: "0.15em",
-        textTransform: "uppercase", pointerEvents: "none", userSelect: "none",
+        fontSize: 11, fontFamily: "monospace",
+        letterSpacing: "0.15em", textTransform: "uppercase",
+        pointerEvents: "none", userSelect: "none",
       }}>
         JARVIS · ONLINE
       </div>
 
-      {/* Timer display — canto superior direito */}
+      {/* Countdown timer — top right */}
       {timerDisplay && (
         <div style={{
           position: "fixed", top: 18, right: 22, zIndex: 10,
-          color: "rgba(255,255,255,0.75)",
           textAlign: "right", pointerEvents: "none", userSelect: "none",
         }}>
           <div style={{
@@ -697,13 +793,13 @@ export default function JarvisPage() {
           }}>
             {timerDisplay.label}
           </div>
-          <div style={{ fontSize: 22, fontFamily: "monospace", fontWeight: 300, letterSpacing: "0.06em" }}>
+          <div style={{ fontSize: 22, fontFamily: "monospace", fontWeight: 300, letterSpacing: "0.06em", color: "rgba(255,255,255,0.75)" }}>
             {formatTime(timerDisplay.timeLeft)}
           </div>
         </div>
       )}
 
-      {/* Caption */}
+      {/* Caption — bottom center */}
       {caption && (
         <div style={{
           position: "fixed", bottom: 52, left: "50%", zIndex: 10,
@@ -711,8 +807,7 @@ export default function JarvisPage() {
           maxWidth: "min(660px, 86vw)",
           textAlign: "center",
           padding: "10px 24px", borderRadius: 6,
-          background: "rgba(0,0,0,0.5)",
-          backdropFilter: "blur(8px)",
+          background: "rgba(0,0,0,0.5)", backdropFilter: "blur(8px)",
           color: "#fff",
           fontSize: "clamp(15px, 2vw, 19px)",
           fontFamily: "'Segoe UI', system-ui, sans-serif",
@@ -729,7 +824,7 @@ export default function JarvisPage() {
       <style>{`
         @keyframes fadeUp {
           from { opacity: 0; transform: translateX(-50%) translateY(8px); }
-          to   { opacity: 1; transform: translateX(-50%) translateY(0); }
+          to   { opacity: 1; transform: translateX(-50%) translateY(0);   }
         }
       `}</style>
     </main>
