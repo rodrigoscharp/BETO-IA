@@ -5,252 +5,281 @@ import { useEffect, useRef } from "react";
 export type OrbState = "wake" | "listening" | "thinking" | "speaking";
 interface OrbProps { state: OrbState; onClick: () => void; }
 
-const N = 200;
+/* ── Config ──────────────────────────────────────────────────────────────── */
+
+const N     = 320;   // particle count
+const R     = 162;   // sphere radius (px)
+const PERSP = 520;   // perspective depth
+
+/* ── Fibonacci sphere — evenly distributes N points on unit sphere ───────── */
+
+function fibSphere(n: number): [number, number, number][] {
+  const pts: [number, number, number][] = [];
+  const phi = Math.PI * (3 - Math.sqrt(5)); // golden angle
+  for (let i = 0; i < n; i++) {
+    const y = 1 - (i / (n - 1)) * 2;
+    const r = Math.sqrt(Math.max(0, 1 - y * y));
+    pts.push([Math.cos(phi * i) * r, y, Math.sin(phi * i) * r]);
+  }
+  return pts;
+}
+
+const SPHERE_BASE = fibSphere(N);
+
+/* ── 3D rotation helpers ─────────────────────────────────────────────────── */
+
+function rotY(x: number, y: number, z: number, a: number): [number, number, number] {
+  const c = Math.cos(a), s = Math.sin(a);
+  return [x * c + z * s, y, -x * s + z * c];
+}
+function rotX(x: number, y: number, z: number, a: number): [number, number, number] {
+  const c = Math.cos(a), s = Math.sin(a);
+  return [x, y * c - z * s, y * s + z * c];
+}
+
+/* ── Particle type ───────────────────────────────────────────────────────── */
 
 type P = {
-  x: number; y: number;
-  vx: number; vy: number;
-  size: number;
-  alpha: number;
-  phase: number;
-  phaseSpd: number;
-  orbitR: number;
-  orbitA: number;
-  orbitSpd: number;
+  x: number; y: number; z: number;
+  vx: number; vy: number; vz: number;
+  size: number; alpha: number;
+  phase: number; phaseSpd: number;
 };
 
 function mkParticles(w: number, h: number): P[] {
   return Array.from({ length: N }, () => ({
-    x: Math.random() * w,
-    y: Math.random() * h,
-    vx: (Math.random() - 0.5) * 0.6,
-    vy: (Math.random() - 0.5) * 0.6,
-    size: 0.7 + Math.random() * 2.2,
-    alpha: 0.12 + Math.random() * 0.55,
-    phase: Math.random() * Math.PI * 2,
-    phaseSpd: 0.007 + Math.random() * 0.022,
-    orbitR: 30 + Math.random() * 145,
-    orbitA: Math.random() * Math.PI * 2,
-    orbitSpd: (Math.random() > 0.5 ? 1 : -1) * (0.005 + Math.random() * 0.020),
+    x: (Math.random() - 0.5) * w * 1.4,
+    y: (Math.random() - 0.5) * h * 1.4,
+    z: (Math.random() - 0.5) * 600,
+    vx: (Math.random() - 0.5) * 0.5,
+    vy: (Math.random() - 0.5) * 0.5,
+    vz: (Math.random() - 0.5) * 0.5,
+    size:     0.7 + Math.random() * 1.8,
+    alpha:    0.12 + Math.random() * 0.5,
+    phase:    Math.random() * Math.PI * 2,
+    phaseSpd: 0.007 + Math.random() * 0.02,
   }));
 }
 
+/* ── Component ───────────────────────────────────────────────────────────── */
+
 export default function Orb({ state, onClick }: OrbProps) {
-  const canvasRef   = useRef<HTMLCanvasElement>(null);
-  const frameRef    = useRef(0);
-  const phRef       = useRef(0);
-  const tRef        = useRef(0);
-  const stateRef    = useRef(state);
-  const prevStateRef = useRef<OrbState>(state);
-  const ptsRef      = useRef<P[]>([]);
-  const dimRef      = useRef({ w: 0, h: 0 });
+  const canvasRef    = useRef<HTMLCanvasElement>(null);
+  const frameRef     = useRef(0);
+  const stateRef     = useRef(state);
+  const prevRef      = useRef<OrbState>(state);
+  const ptsRef       = useRef<P[]>([]);
+  const dimRef       = useRef({ w: 0, h: 0 });
+  const tRef         = useRef(0);    // gather: 0 = scattered, 1 = sphere
+  const phRef        = useRef(0);    // global phase
+  const rotYRef      = useRef(0);    // Y spin angle
+  const rotXRef      = useRef(0);    // X tilt angle
 
   useEffect(() => { stateRef.current = state; }, [state]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
+    const ctx = canvas.getContext("2d")!;
 
     const resize = () => {
-      const w = window.innerWidth;
-      const h = window.innerHeight;
-      canvas.width  = w;
-      canvas.height = h;
+      const w = window.innerWidth, h = window.innerHeight;
+      canvas.width = w; canvas.height = h;
       dimRef.current = { w, h };
-      if (ptsRef.current.length === 0) ptsRef.current = mkParticles(w, h);
+      if (!ptsRef.current.length) ptsRef.current = mkParticles(w, h);
     };
-
     resize();
     window.addEventListener("resize", resize);
 
     function draw() {
       const s    = stateRef.current;
-      const prev = prevStateRef.current;
+      const prev = prevRef.current;
       const { w, h } = dimRef.current;
       const CX = w / 2, CY = h / 2;
       const pts = ptsRef.current;
 
-      // Scatter particles outward when returning to wake state
+      /* ── Scatter burst when returning to wake ── */
       if (prev !== "wake" && s === "wake") {
         for (const p of pts) {
-          const dx = p.x - CX;
-          const dy = p.y - CY;
-          const dist = Math.hypot(dx, dy) || 1;
-          const speed = 2.5 + Math.random() * 3.5;
-          p.vx += (dx / dist) * speed + (Math.random() - 0.5) * 2;
-          p.vy += (dy / dist) * speed + (Math.random() - 0.5) * 2;
+          const d = Math.hypot(p.x, p.y, p.z) || 1;
+          const spd = 4 + Math.random() * 4.5;
+          p.vx += (p.x / d) * spd + (Math.random() - 0.5) * 3;
+          p.vy += (p.y / d) * spd + (Math.random() - 0.5) * 3;
+          p.vz += (p.z / d) * spd + (Math.random() - 0.5) * 3;
         }
       }
-      prevStateRef.current = s;
+      prevRef.current = s;
 
-      phRef.current +=
-        s === "speaking"  ? 0.070 :
-        s === "thinking"  ? 0.038 :
-        s === "listening" ? 0.024 : 0.008;
+      /* ── Timing ── */
+      const spinSpd = s === "thinking" ? 0.013 : s === "speaking" ? 0.010 : s === "listening" ? 0.005 : 0.0008;
+      phRef.current   += s === "speaking" ? 0.068 : s === "thinking" ? 0.040 : s === "listening" ? 0.022 : 0.007;
+      rotYRef.current += spinSpd;
+      rotXRef.current  = Math.sin(phRef.current * 0.07) * 0.14;
+
       const ph = phRef.current;
+      const ay = rotYRef.current;
+      const ax = rotXRef.current;
 
-      const vp = s === "speaking"
-        ? 0.5 * Math.abs(Math.sin(ph * 3.7))
-        + 0.3 * Math.abs(Math.sin(ph * 7.1  + 1.2))
-        + 0.2 * Math.abs(Math.sin(ph * 13.3 + 2.4))
-        : 0;
-
-      // Smooth gather transition
-      const targetT = s !== "wake" ? 1 : 0;
-      tRef.current  += (targetT - tRef.current) * 0.028;
+      /* ── Gather factor ── */
+      tRef.current += ((s !== "wake" ? 1 : 0) - tRef.current) * 0.030;
       const t = tRef.current;
 
-      const hue =
-        s === "thinking"  ? 265 :
-        s === "listening" ? 188 :
-        s === "speaking"  ? 205 : 215;
+      /* ── Speaking pulse ── */
+      const pulse = s === "speaking"
+        ? 0.5 * Math.abs(Math.sin(ph * 3.7))
+        + 0.3 * Math.abs(Math.sin(ph * 7.2 + 1.1))
+        + 0.2 * Math.abs(Math.sin(ph * 13  + 2.3))
+        : 0;
+      const curR = R * (1 + pulse * 0.20);
 
-      ctx!.clearRect(0, 0, w, h);
+      /* ── Color ── */
+      const hue = s === "thinking" ? 265 : s === "listening" ? 188 : s === "speaking" ? 205 : 215;
 
-      // ── Particles ────────────────────────────────────────────────────────
-      for (const p of pts) {
+      ctx.clearRect(0, 0, w, h);
+
+      /* ── Rotated sphere home positions ── */
+      const homes: [number, number, number][] = SPHERE_BASE.map(([bx, by, bz]) => {
+        let p = rotY(bx, by, bz, ay);
+        p = rotX(p[0], p[1], p[2], ax);
+        return [p[0] * curR, p[1] * curR, p[2] * curR];
+      });
+
+      /* ── Update physics ── */
+      for (let i = 0; i < pts.length; i++) {
+        const p = pts[i];
         p.phase += p.phaseSpd;
-        const twinkle = 0.45 + 0.55 * Math.sin(p.phase);
 
+        // Spring toward sphere home
         if (t > 0.01) {
-          // Spring toward orbit position
-          p.orbitA += p.orbitSpd * (0.6 + t * 0.8);
-          const tx = CX + Math.cos(p.orbitA) * p.orbitR;
-          const ty = CY + Math.sin(p.orbitA) * p.orbitR;
-          p.vx += (tx - p.x) * 0.065 * t;
-          p.vy += (ty - p.y) * 0.065 * t;
+          const [hx, hy, hz] = homes[i];
+          p.vx += (hx - p.x) * 0.052 * t;
+          p.vy += (hy - p.y) * 0.052 * t;
+          p.vz += (hz - p.z) * 0.052 * t;
         }
 
-        // Idle drift: very gentle in wake mode so particles glide slowly
-        if (t < 0.98) {
-          const nudge = s === "wake" ? 0.010 : 0.045;
+        // Gentle drift when scattered
+        if (t < 0.99) {
+          const nudge = s === "wake" ? 0.011 : 0.035;
           p.vx += (Math.random() - 0.5) * nudge * (1 - t);
           p.vy += (Math.random() - 0.5) * nudge * (1 - t);
+          p.vz += (Math.random() - 0.5) * nudge * (1 - t);
         }
 
-        // Less damping in wake so scatter momentum fades slowly → smooth drift
-        const damp = s === "wake" && t < 0.05 ? 0.972 : 0.91;
-        p.vx *= damp;
-        p.vy *= damp;
-        p.x  += p.vx;
-        p.y  += p.vy;
+        // Damping — slower in wake so scatter fades gently
+        const damp = s === "wake" && t < 0.05 ? 0.974 : 0.912;
+        p.vx *= damp; p.vy *= damp; p.vz *= damp;
+        p.x  += p.vx;  p.y  += p.vy;  p.z  += p.vz;
 
-        // Wrap edges when idle
-        if (t < 0.4) {
-          if (p.x < -20) p.x = w + 20;
-          if (p.x > w + 20) p.x = -20;
-          if (p.y < -20) p.y = h + 20;
-          if (p.y > h + 20) p.y = -20;
+        // Wrap edges when scattered
+        if (t < 0.35) {
+          const bx = w / 2 + 60, by = h / 2 + 60, bz = 400;
+          if (p.x < -bx) p.x = bx;  if (p.x > bx) p.x = -bx;
+          if (p.y < -by) p.y = by;  if (p.y > by) p.y = -by;
+          if (p.z < -bz) p.z = bz;  if (p.z > bz) p.z = -bz;
         }
-
-        const dist     = Math.hypot(p.x - CX, p.y - CY);
-        const proximity = Math.max(0, 1 - dist / 220);
-        const bright    = 1 + t * proximity * 1.8;
-        const alpha     = Math.min(0.95, p.alpha * twinkle * bright);
-        const radius    = p.size * (1 + t * proximity * 0.7);
-
-        ctx!.beginPath();
-        ctx!.arc(p.x, p.y, radius, 0, Math.PI * 2);
-        ctx!.fillStyle = t > 0.08 && proximity > 0.15
-          ? `hsla(${hue},85%,82%,${alpha})`
-          : `rgba(255,255,255,${alpha * (0.4 + t * 0.6)})`;
-        ctx!.fill();
       }
 
-      // ── Central glow ─────────────────────────────────────────────────────
+      /* ── Sort back-to-front for correct depth blending ── */
+      const sorted = pts.map((p, i) => [p, i] as [P, number]).sort((a, b) => a[0].z - b[0].z);
+
+      /* ── Draw particles ── */
+      for (const [p] of sorted) {
+        // Perspective scale: closer (higher z) = larger
+        const scale = PERSP / (PERSP + p.z);
+        const sx    = CX + p.x * scale;
+        const sy    = CY + p.y * scale;
+
+        // Depth: front = 1, back = 0
+        const depth = Math.max(0, Math.min(1, (p.z + curR * 1.6) / (curR * 3.2)));
+
+        const twinkle = 0.45 + 0.55 * Math.sin(p.phase);
+        const bright  = 1 + depth * 1.6 * t;
+        const alpha   = Math.min(0.96, p.alpha * twinkle * bright);
+        const radius  = Math.max(0.25, p.size * scale * (1 + depth * 0.6 * t));
+        const lightness = 65 + depth * 28;
+
+        ctx.beginPath();
+        ctx.arc(sx, sy, radius, 0, Math.PI * 2);
+        ctx.fillStyle = t > 0.06
+          ? `hsla(${hue},80%,${lightness}%,${alpha})`
+          : `rgba(255,255,255,${alpha * (0.35 + t * 0.65)})`;
+        ctx.fill();
+      }
+
+      /* ── Central glow ── */
       if (t > 0.04) {
-        // Outer ambient
-        const ambR = (s === "speaking" ? 280 + vp * 100 : s === "listening" ? 240 + 20 * Math.sin(ph) : 200) * t;
-        const ambA = t * (s === "speaking" ? 0.09 + vp * 0.07 : 0.055);
-        const ga   = ctx!.createRadialGradient(CX, CY, 0, CX, CY, ambR);
-        ga.addColorStop(0,    `hsla(${hue},85%,65%,0)`);
-        ga.addColorStop(0.35, `hsla(${hue},80%,60%,${ambA * 0.5})`);
-        ga.addColorStop(0.65, `hsla(${hue},75%,55%,${ambA})`);
-        ga.addColorStop(1,    `hsla(${hue},70%,50%,0)`);
-        ctx!.beginPath();
-        ctx!.arc(CX, CY, ambR, 0, Math.PI * 2);
-        ctx!.fillStyle = ga;
-        ctx!.fill();
+        const ambR = (s === "speaking" ? 290 + pulse * 110 : 215) * t;
+        const ambA = t * (s === "speaking" ? 0.08 + pulse * 0.06 : 0.045);
+        const ga   = ctx.createRadialGradient(CX, CY, 0, CX, CY, ambR);
+        ga.addColorStop(0,   `hsla(${hue},85%,65%,0)`);
+        ga.addColorStop(0.4, `hsla(${hue},80%,60%,${ambA * 0.4})`);
+        ga.addColorStop(0.7, `hsla(${hue},75%,55%,${ambA})`);
+        ga.addColorStop(1,   `hsla(${hue},70%,50%,0)`);
+        ctx.beginPath(); ctx.arc(CX, CY, ambR, 0, Math.PI * 2);
+        ctx.fillStyle = ga; ctx.fill();
 
-        // Bright core
-        const coreR = (s === "speaking" ? 38 + vp * 28 : 22 + 5 * Math.sin(ph * 0.8)) * t;
-        const coreA = t * (s === "speaking" ? 0.85 + vp * 0.15 : 0.55);
-        const gc    = ctx!.createRadialGradient(CX, CY, 0, CX, CY, coreR * 3);
+        const coreR = (s === "speaking" ? 34 + pulse * 22 : 18 + 4 * Math.sin(ph * 0.75)) * t;
+        const coreA = t * (s === "speaking" ? 0.88 + pulse * 0.12 : 0.52);
+        const gc    = ctx.createRadialGradient(CX, CY, 0, CX, CY, coreR * 2.8);
         gc.addColorStop(0,    `rgba(255,255,255,${coreA})`);
-        gc.addColorStop(0.2,  `hsla(${hue},90%,90%,${coreA * 0.6})`);
-        gc.addColorStop(0.55, `hsla(${hue},85%,70%,${coreA * 0.15})`);
+        gc.addColorStop(0.22, `hsla(${hue},90%,92%,${coreA * 0.55})`);
+        gc.addColorStop(0.6,  `hsla(${hue},85%,70%,${coreA * 0.12})`);
         gc.addColorStop(1,    `hsla(${hue},80%,60%,0)`);
-        ctx!.beginPath();
-        ctx!.arc(CX, CY, coreR * 3, 0, Math.PI * 2);
-        ctx!.fillStyle = gc;
-        ctx!.fill();
+        ctx.beginPath(); ctx.arc(CX, CY, coreR * 2.8, 0, Math.PI * 2);
+        ctx.fillStyle = gc; ctx.fill();
       }
 
-      // ── Speaking: shockwave rings ────────────────────────────────────────
+      /* ── Speaking: shockwave rings ── */
       if (s === "speaking" && t > 0.4) {
         for (let i = 0; i < 4; i++) {
-          const wt = (ph * 1.8 + i * 0.25) % 1;
-          const wr = (60 + wt * 300) * t;
-          const wa = (1 - wt) * (0.16 + vp * 0.14) * t;
-          ctx!.beginPath();
-          ctx!.arc(CX, CY, wr, 0, Math.PI * 2);
-          ctx!.strokeStyle = `hsla(${hue},88%,82%,${wa})`;
-          ctx!.lineWidth   = Math.max(0.3, 1.3 * (1 - wt));
-          ctx!.stroke();
+          const wt = (ph * 1.7 + i * 0.25) % 1;
+          const wr = (curR * 0.38 + wt * curR * 2.3) * t;
+          const wa = (1 - wt) * (0.13 + pulse * 0.11) * t;
+          ctx.beginPath(); ctx.arc(CX, CY, wr, 0, Math.PI * 2);
+          ctx.strokeStyle = `hsla(${hue},88%,82%,${wa})`;
+          ctx.lineWidth   = Math.max(0.3, 1.2 * (1 - wt));
+          ctx.stroke();
         }
       }
 
-      // ── Listening: concentric pulses ─────────────────────────────────────
+      /* ── Listening: concentric pulses ── */
       if (s === "listening" && t > 0.4) {
         for (let i = 0; i < 3; i++) {
-          const lt = (ph * 0.26 + i / 3) % 1;
-          const lr = (50 + lt * 200) * t;
-          const la = (1 - lt) * 0.18 * t;
-          ctx!.beginPath();
-          ctx!.arc(CX, CY, lr, 0, Math.PI * 2);
-          ctx!.strokeStyle = `hsla(${hue},90%,80%,${la})`;
-          ctx!.lineWidth   = 1.1 * (1 - lt * 0.4);
-          ctx!.stroke();
+          const lt = (ph * 0.23 + i / 3) % 1;
+          const lr = (curR * 0.3 + lt * curR * 1.9) * t;
+          const la = (1 - lt) * 0.16 * t;
+          ctx.beginPath(); ctx.arc(CX, CY, lr, 0, Math.PI * 2);
+          ctx.strokeStyle = `hsla(${hue},90%,80%,${la})`;
+          ctx.lineWidth   = 1.0 * (1 - lt * 0.4);
+          ctx.stroke();
         }
       }
 
-      // ── Thinking: rotating dashed arcs ──────────────────────────────────
+      /* ── Thinking: rotating dashed arcs ── */
       if (s === "thinking" && t > 0.4) {
-        ctx!.save();
-        ctx!.translate(CX, CY);
+        ctx.save(); ctx.translate(CX, CY);
         ([
-          { spd:  0.50, r: 130, arc: 0.65, lw: 1.4, a: 0.20, dash: [8,  14] as [number,number] },
-          { spd: -0.34, r: 168, arc: 0.42, lw: 1.0, a: 0.12, dash: [5,  18] as [number,number] },
-          { spd:  0.20, r: 200, arc: 0.28, lw: 0.7, a: 0.07, dash: [4,  22] as [number,number] },
+          { spd:  0.48, r: curR * 0.92, arc: 0.65, lw: 1.3, a: 0.19, dash: [8,  14] as [number, number] },
+          { spd: -0.32, r: curR * 1.18, arc: 0.42, lw: 0.9, a: 0.11, dash: [5,  18] as [number, number] },
+          { spd:  0.19, r: curR * 1.40, arc: 0.28, lw: 0.6, a: 0.07, dash: [4,  22] as [number, number] },
         ] as const).forEach(({ spd, r, arc, lw, a, dash }) => {
-          ctx!.save();
-          ctx!.rotate(ph * spd);
-          ctx!.beginPath();
-          ctx!.arc(0, 0, r * t, 0, Math.PI * arc);
-          ctx!.strokeStyle = `hsla(${hue},88%,74%,${a * t})`;
-          ctx!.lineWidth   = lw;
-          ctx!.setLineDash(dash);
-          ctx!.stroke();
-          ctx!.setLineDash([]);
-          ctx!.restore();
+          ctx.save();
+          ctx.rotate(ph * spd);
+          ctx.beginPath(); ctx.arc(0, 0, r * t, 0, Math.PI * arc);
+          ctx.strokeStyle = `hsla(${hue},88%,74%,${a * t})`;
+          ctx.lineWidth = lw; ctx.setLineDash(dash); ctx.stroke();
+          ctx.setLineDash([]); ctx.restore();
         });
-        ctx!.restore();
+        ctx.restore();
       }
 
-      // ── Wake: subtle center click hint ───────────────────────────────────
+      /* ── Wake: subtle click hint ── */
       if (s === "wake" && t < 0.08) {
-        const pulse = 0.5 + 0.5 * Math.sin(ph * 0.35);
-        ctx!.beginPath();
-        ctx!.arc(CX, CY, 6 + pulse * 3, 0, Math.PI * 2);
-        ctx!.fillStyle = `rgba(255,255,255,${0.07 + pulse * 0.05})`;
-        ctx!.fill();
-        ctx!.beginPath();
-        ctx!.arc(CX, CY, 22 + pulse * 4, 0, Math.PI * 2);
-        ctx!.strokeStyle = `rgba(255,255,255,${0.04 + pulse * 0.03})`;
-        ctx!.lineWidth = 0.6;
-        ctx!.stroke();
+        const p2 = 0.5 + 0.5 * Math.sin(ph * 0.32);
+        ctx.beginPath(); ctx.arc(CX, CY, 7 + p2 * 3, 0, Math.PI * 2);
+        ctx.fillStyle = `rgba(255,255,255,${0.06 + p2 * 0.04})`; ctx.fill();
+        ctx.beginPath(); ctx.arc(CX, CY, 24 + p2 * 4, 0, Math.PI * 2);
+        ctx.strokeStyle = `rgba(255,255,255,${0.03 + p2 * 0.02})`; ctx.lineWidth = 0.5; ctx.stroke();
       }
 
       frameRef.current = requestAnimationFrame(draw);
@@ -267,14 +296,7 @@ export default function Orb({ state, onClick }: OrbProps) {
     <canvas
       ref={canvasRef}
       onClick={onClick}
-      style={{
-        position: "fixed",
-        inset: 0,
-        width: "100%",
-        height: "100%",
-        cursor: "pointer",
-        display: "block",
-      }}
+      style={{ position: "fixed", inset: 0, width: "100%", height: "100%", cursor: "pointer", display: "block" }}
     />
   );
 }
