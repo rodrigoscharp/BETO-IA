@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200">
+  <defs>
+    <radialGradient id="glow" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#00f5ff" stop-opacity="0.3"/>
+      <stop offset="100%" stop-color="#000" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="blur">
+      <feGaussianBlur stdDeviation="3" result="blur"/>
+      <feComposite in="SourceGraphic" in2="blur" operator="over"/>
+    </filter>
+  </defs>
+
+  <!-- Background circle -->
+  <circle cx="100" cy="100" r="96" fill="#050a0f" stroke="#0ff" stroke-width="1" stroke-opacity="0.3"/>
+
+  <!-- Glow -->
+  <circle cx="100" cy="100" r="80" fill="url(#glow)"/>
+
+  <!-- Outer ring segments -->
+  <circle cx="100" cy="100" r="80" fill="none" stroke="#00f5ff" stroke-width="1" stroke-opacity="0.4" stroke-dasharray="30 10"/>
+  <circle cx="100" cy="100" r="70" fill="none" stroke="#00f5ff" stroke-width="0.5" stroke-opacity="0.2" stroke-dasharray="15 5"/>
+
+  <!-- Inner hex shape -->
+  <polygon points="100,30 158,65 158,135 100,170 42,135 42,65" fill="none" stroke="#00f5ff" stroke-width="1" stroke-opacity="0.5"/>
+
+  <!-- J letter -->
+  <text x="100" y="125" font-family="monospace" font-size="80" font-weight="bold" fill="#00f5ff" text-anchor="middle" opacity="0.9" filter="url(#blur)">J</text>
+  <text x="100" y="125" font-family="monospace" font-size="80" font-weight="bold" fill="#00f5ff" text-anchor="middle" opacity="0.95">J</text>
+
+  <!-- Corner dots -->
+  <circle cx="100" cy="22" r="2.5" fill="#00f5ff" opacity="0.8"/>
+  <circle cx="100" cy="178" r="2.5" fill="#00f5ff" opacity="0.8"/>
+  <circle cx="22" cy="100" r="2.5" fill="#00f5ff" opacity="0.8"/>
+  <circle cx="178" cy="100" r="2.5" fill="#00f5ff" opacity="0.8"/>
+</svg>

@@ -1,7 +1,6 @@
 <div align="center">
 
-<!-- Substitua pela sua logo -->
-<img src="public/logo.png" alt="J.A.R.V.I.S" width="120" />
+<img src="public/logo.svg" alt="J.A.R.V.I.S" width="120" />
 
 # J.A.R.V.I.S
 
