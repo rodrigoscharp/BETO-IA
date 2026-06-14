@@ -1,12 +1,12 @@
 <div align="center">
 
-<img src="public/logo.svg" alt="J.A.R.V.I.S" width="120" />
+<img src="public/logo.svg" alt="BETO IA" width="120" />
 
-# J.A.R.V.I.S
+# BETO IA
 
-**Just A Rather Very Intelligent System**
+**Seu parceiro nordestino de inteligência artificial**
 
-Assistente pessoal de voz e texto, sci-fi, rodando no seu próprio servidor.
+Assistente pessoal de voz e texto, sci-fi, com simpatia e sotaque, rodando no seu próprio servidor.
 
 [![Next.js](https://img.shields.io/badge/Next.js-14-black?logo=next.js)](https://nextjs.org)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5-blue?logo=typescript)](https://typescriptlang.org)
@@ -18,13 +18,13 @@ Assistente pessoal de voz e texto, sci-fi, rodando no seu próprio servidor.
 
 ---
 
-> Clone, configure suas chaves e tenha seu próprio Jarvis rodando em menos de 10 minutos.
+> Clone, configure suas chaves e tenha seu próprio Beto rodando em menos de 10 minutos.
 
 ---
 
 ## O que é isso
 
-Um assistente pessoal que você hospeda. Sem assinaturas, sem dados de terceiros, sem rastreamento. Você conecta suas próprias contas (Spotify, Google, GitHub) e o Jarvis passa a controlar tudo por voz.
+Um assistente pessoal que você hospeda. Sem assinaturas, sem dados de terceiros, sem rastreamento. Você conecta suas próprias contas (Spotify, Google, GitHub) e o Beto passa a controlar tudo por voz.
 
 A interface é uma tela escura com um orbe 3D animado que reage ao que você está fazendo — ouvindo, processando, falando. A voz usa [ElevenLabs](https://elevenlabs.io) para síntese realista e [Groq](https://groq.com) para inferência rápida do LLM.
 
@@ -33,7 +33,8 @@ A interface é uma tela escura com um orbe 3D animado que reage ao que você est
 ## Funcionalidades
 
 **Voz e conversa**
-- Ativação por palavra-chave: "Jarvis", "Ei Jarvis", "Olá Jarvis"
+- Ativação por palavra-chave: "Beto", "Ei Beto", "Olá Beto"
+- Personalidade nordestina, engraçada e parceira — fala com gírias tipo "oxente", "vixe", "arretado", "visse"
 - Reconhecimento em português via Web Speech API (Chrome/Edge)
 - Síntese de voz com ElevenLabs (voz Adam, grave) — fallback para Speech Synthesis nativa
 - Histórico de contexto das últimas 20 mensagens por sessão
@@ -198,7 +199,7 @@ Cada push para `main` faz deploy automático.
 
 ## Como os comandos de voz funcionam
 
-O Jarvis detecta ações pelo LLM usando tags estruturadas na resposta. Quando você pede algo como "toca Led Zeppelin", o modelo retorna:
+O Beto detecta ações pelo LLM usando tags estruturadas na resposta. Quando você pede algo como "toca Led Zeppelin", o modelo retorna:
 
 ```
 [SPOTIFY:{"action":"play","query":"Led Zeppelin"}]
@@ -220,10 +221,10 @@ O frontend faz o parse dessa tag e chama a API correspondente. Nenhuma palavra-c
 
 ---
 
-## Personalizando o seu Jarvis
+## Personalizando o seu Beto
 
 **Mudar a personalidade:**  
-Edite o system prompt em `app/api/chat/route.ts`. É onde o Jarvis recebe sua identidade — nome, tom, idioma, instruções de comportamento.
+Edite o system prompt em `app/api/chat/route.ts`. É onde o Beto recebe sua identidade — nome, tom, idioma, instruções de comportamento.
 
 **Mudar a voz:**  
 No ElevenLabs, escolha qualquer voz disponível no seu plano e atualize `ELEVENLABS_VOICE_ID`. A variável `ELEVENLABS_API_KEY` já cuida da autenticação.

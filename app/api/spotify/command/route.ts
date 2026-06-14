@@ -126,7 +126,7 @@ export async function POST(req: NextRequest) {
         if (devRes.ok) {
           const devData = await devRes.json();
           type SpDev = { id: string; name: string; is_active: boolean };
-          const devices: SpDev[] = (devData.devices ?? []).filter((d: SpDev) => d.name !== "Jarvis");
+          const devices: SpDev[] = (devData.devices ?? []).filter((d: SpDev) => d.name !== "Beto");
           const device = devices.find(d => d.is_active) ?? devices[0];
           if (device) {
             const body = playUri.startsWith("spotify:track:") ? { uris: [playUri] } : { context_uri: playUri };

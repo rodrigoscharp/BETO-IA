@@ -56,7 +56,7 @@ interface MemoryAction   { action: string; content?: string; category?: string }
    Constants
 ══════════════════════════════════════════════════════════════════════════ */
 
-const WAKE_WORDS = ["jarvis", "olá jarvis", "ola jarvis", "hey jarvis", "ei jarvis", "acorda jarvis", "acorda, jarvis"];
+const WAKE_WORDS = ["beto", "olá beto", "ola beto", "hey beto", "ei beto", "acorda beto", "acorda, beto"];
 
 const TAG = {
   SPOTIFY:  /\[SPOTIFY:(\{[\s\S]*?\})\]\s*/,
@@ -234,7 +234,7 @@ export default function JarvisPage() {
     const SDK = window.Spotify;
     if (!SDK) return;
     const player = new SDK.Player({
-      name: "Jarvis",
+      name: "Beto",
       getOAuthToken: (cb) => {
         fetch("/api/spotify/token")
           .then(r => r.json())
@@ -245,7 +245,7 @@ export default function JarvisPage() {
     });
     player.addListener("ready",         ({ device_id }) => { deviceId.current = device_id; });
     player.addListener("not_ready",     ()              => { deviceId.current = null; });
-    player.addListener("account_error", ()              => { console.warn("[Jarvis] Spotify Premium necessário."); });
+    player.addListener("account_error", ()              => { console.warn("[Beto] Spotify Premium necessário."); });
     player.connect();
   }
 
@@ -303,7 +303,7 @@ export default function JarvisPage() {
 
   function onCountdownEnd(label: string) {
     if ("Notification" in window && Notification.permission === "granted") {
-      new Notification("Jarvis", { body: `${label} finalizado!`, icon: "/favicon.ico" });
+      new Notification("Beto", { body: `${label} finalizado!`, icon: "/favicon.ico" });
     }
     const lower = label.toLowerCase();
     const msg   =
@@ -789,7 +789,7 @@ export default function JarvisPage() {
         letterSpacing: "0.15em", textTransform: "uppercase",
         pointerEvents: "none", userSelect: "none",
       }}>
-        JARVIS · ONLINE
+        BETO · ONLINE
       </div>
 
       {/* Audio unlock hint — fades away after first interaction */}
