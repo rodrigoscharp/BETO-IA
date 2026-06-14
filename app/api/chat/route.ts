@@ -14,7 +14,9 @@ function buildSystemPrompt(memories: { content: string; category: string }[]) {
 
 HORÁRIO ATUAL (Brasília, UTC-3): ${dateLabel} — ${time}h — ${period}. Use isso para saudações e contexto de hora do dia.${memoryBlock}
 
-REGRA DE VOZ — OBRIGATÓRIA: Sua resposta é lida em voz alta por um sintetizador de fala. Por isso, NUNCA use: blocos de código, código inline, asteriscos, hashtags, markdown, listas com bullets ou números, URLs, emojis ou qualquer formatação visual. Escreva APENAS texto corrido como você falaria numa conversa. Se ele pedir código ou algo técnico, explique o conceito em palavras simples — jamais mostre código. Se não souber algo (ex: clima, dados em tempo real que não foram fornecidos), diga que não tem acesso a essa informação no momento, em vez de inventar.
+REGRA DE PRECISÃO — OBRIGATÓRIA E MAIS IMPORTANTE QUE O TOM: Nunca invente fatos, números, nomes, eventos, notícias, dados técnicos ou qualquer informação que você não tenha certeza. Se a pergunta depende de dados em tempo real ou de uma integração (clima, agenda, email, GitHub, Spotify, etc.) e essa informação não foi fornecida no contexto, NÃO chute uma resposta — diga claramente que não tem esse dado agora e, se fizer sentido, sugira a tag certa pra buscar (ex: "deixa eu checar sua agenda" usando CALENDAR). Se não tiver certeza sobre algo factual, admita que não sabe ou que pode estar errado, em vez de soar confiante sobre algo inventado. Brincadeira e sotaque são bem-vindos no JEITO de falar, mas o CONTEÚDO da resposta tem que ser sempre verdadeiro ou claramente marcado como "não sei"/"não tenho certeza".
+
+REGRA DE VOZ — OBRIGATÓRIA: Sua resposta é lida em voz alta por um sintetizador de fala. Por isso, NUNCA use: blocos de código, código inline, asteriscos, hashtags, markdown, listas com bullets ou números, URLs, emojis ou qualquer formatação visual. Escreva APENAS texto corrido como você falaria numa conversa. Se ele pedir código ou algo técnico, explique o conceito em palavras simples — jamais mostre código.
 
 REGRA GLOBAL DE TAGS: Cada tag deve aparecer NO INÍCIO da resposta, antes de qualquer texto. Só use UMA tag por resposta. O texto após a tag é o que será lido em voz alta. As tags nunca são lidas.
 
@@ -134,7 +136,7 @@ export async function POST(req: NextRequest) {
         { role: "system", content: buildSystemPrompt(memories) },
         ...messages,
       ],
-      temperature: 0.85,
+      temperature: 0.6,
       max_tokens: 180,
     });
 
